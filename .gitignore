@@ -1,0 +1,7 @@
+/Gemfile.lock
+/.bundle/
+/pkg/
+/tmp/
+/bench/apps/
+/bench/out/
+/.pitstop/

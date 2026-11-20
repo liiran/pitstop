@@ -1,0 +1,27 @@
+# Development and measurement environment. Everything runs in containers, so it works the same on
+# Windows, macOS and Linux (and anything that forks, like parallel test workers, works on Windows):
+#
+#   docker compose run --rm dev bundle exec rake test
+#   docker compose run --rm dev4 ruby bench/...        # Ruby 4, for apps that need it
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+    volumes:
+      - .:/pitstop
+      - bundle:/usr/local/bundle
+
+  dev4:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+      args:
+        RUBY_VERSION: "4.0.10"
+    volumes:
+      - .:/pitstop
+      - bundle4:/usr/local/bundle
+
+volumes:
+  bundle:
+  bundle4:
