@@ -28,25 +28,32 @@ module Pitstop
       raise ArgumentError, "no recorded tests in #{shard_dir}" if records.none? { _1["kind"] == "test" }
 
       tests = {}
+      groups = []
       boot = Hash.new { |h, k| h[k] = [] }
       by_file = Hash.new { |h, k| h[k] = Hash.new { |hh, kk| hh[kk] = [] } }
       records.each do |r|
-        if r["kind"] == "test"
-          tests[r["id"]] = r # a test recorded twice (a retry) keeps its last run
-        else
-          r["cov"].each { |path, ranges| boot[path].concat(ranges) }
+        case r["kind"]
+        when "test" then tests[r["id"]] = r # a test recorded twice (a retry) keeps its last run
+        when "group" then groups << r
+        else r["cov"].each { |path, ranges| boot[path].concat(ranges) }
         end
       end
       list = tests.values
+      number = list.each_with_index.to_h { |r, i| [r["id"], i] }
       list.each_with_index do |r, i|
-        r["cov"].each { |path, ranges| by_file[path][ranges] << i }
+        r["cov"]&.each { |path, ranges| by_file[path][ranges] << i }
+      end
+      # Recorded per test file: every test in the file shares the file's lines.
+      groups.each do |g|
+        idx = g["tests"].filter_map { number[_1] }
+        g["cov"].each { |path, ranges| by_file[path][ranges].concat(idx) }
       end
       new(
         "version" => VERSION, "commit" => commit, "dirty" => dirty,
         "framework" => list.first["framework"],
         "tests" => list.map { [_1["id"], _1["file"], _1["line"], _1["status"], _1["ms"]] },
         "boot" => boot.transform_values { merge_ranges(_1) },
-        "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx] } }
+        "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx.uniq] } }
       )
     end
 

@@ -17,7 +17,13 @@ module Pitstop
     # keeps reading coverage cheap on suites with thousands of them.
     SKIP = %r{\A(vendor|tmp|node_modules|\.bundle|\.pitstop)/|\A(test|spec)/.*_(test|spec)\.rb\z}
 
+    # "test" reads coverage after every test. "file" reads it once per test file and gives every
+    # test in the file the same lines: far cheaper for suites of tiny tests (RuboCop's take ~2 ms
+    # each), and selection then runs whole test files.
+    GRANULARITY = ENV.fetch("PITSTOP_GRANULARITY", "test")
+
     @parent_pid = Process.pid
+    @group = nil
     @booted = false
     @shard = nil
     @shard_pid = nil
@@ -75,19 +81,55 @@ module Pitstop
 
       # In a freshly forked worker: whatever ran since the last read happened while the worker
       # started up, not in a test.
+      #
+      # A fork made from inside a test (the test's own subprocess) records nothing: its lines belong
+      # to that test, and counting them as start-up would make them look like boot code.
       def after_fork
         @shard = nil
-        write(kind: "worker_boot", cov: take)
+        @group = nil
+        if @in_test
+          @silent = true
+        else
+          write(kind: "worker_boot", cov: take)
+        end
+      end
+
+      # Per test file, the previous file's lines are read here, before this test runs: reading them
+      # after would hand this test's lines to the previous file (tests run in random order, so
+      # that file can be anything).
+      def test_started(file)
+        @in_test = true
+        return unless GRANULARITY == "file"
+
+        flush_group if @group && @group[:file] != file
+        @group ||= { file:, tests: [] }
       end
 
       def test_finished(framework:, id:, file:, line:, status:, ms:)
+        @in_test = false
+        if GRANULARITY == "file"
+          @group[:tests] << id if @group
+          return write(kind: "test", framework:, id:, file:, line:, status:, ms:)
+        end
+
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         cov = take
         take_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(2)
         write(kind: "test", framework:, id:, file:, line:, status:, ms:, take_ms:, cov:)
       end
 
+      # The lines every test of the current test file ran, together.
+      def flush_group
+        return unless @group
+
+        group = @group
+        @group = nil
+        write(kind: "group", file: group[:file], tests: group[:tests], cov: take)
+      end
+
       def write(record)
+        return if @silent
+
         shard.puts(JSON.generate(record.merge(pid: Process.pid)))
       end
 
@@ -120,18 +162,20 @@ module Pitstop
         @rspec = true
         ::RSpec.configure do |config|
           config.before(:suite) { Pitstop::Record.boot! }
+          config.after(:suite) { Pitstop::Record.flush_group }
           config.around(:each) do |example|
+            # The spec file that runs this example; for a shared example that's the file including it.
+            file = Pitstop::Record.relative(File.expand_path(example.metadata[:rerun_file_path] || example.metadata[:file_path]))
             started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            Pitstop::Record.test_started(file)
             example.run
             ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(1)
             status = if example.exception then "fail"
                      elsif example.pending? || example.skipped? then "skip"
                      else "pass"
                      end
-            Pitstop::Record.test_finished(
-              framework: "rspec", id: example.id, file: Pitstop::Record.relative(File.expand_path(example.metadata[:file_path])),
-              line: example.metadata[:line_number], status:, ms:
-            )
+            Pitstop::Record.test_finished(framework: "rspec", id: example.id, file:,
+                                          line: example.metadata[:line_number], status:, ms:)
           end
         end
       end
@@ -142,27 +186,32 @@ module Pitstop
       def run(*)
         Pitstop::Record.boot!
         super
+      ensure
+        Pitstop::Record.flush_group
       end
     end
 
     module MinitestTest
       def run
+        file, line = Pitstop::Record.minitest_location(self)
+        Pitstop::Record.test_started(file)
         result = super
-        Pitstop::Record.test_finished(framework: "minitest", **Pitstop::Record.minitest_identity(self, result))
+        status = if result.skipped? then "skip"
+                 elsif result.passed? then "pass"
+                 else "fail"
+                 end
+        Pitstop::Record.test_finished(framework: "minitest", id: "#{self.class.name}##{name}", file:, line:,
+                                      status:, ms: (result.time * 1000).round(1))
         result
       end
     end
 
-    def self.minitest_identity(test, result)
-      klass = test.class
+    # The file that defines the test class (so tests mixed in from a module still map to the test
+    # file that runs them), and the test method's line.
+    def self.minitest_location(test)
       method_file, line = test.method(test.name).source_location rescue [nil, nil]
-      class_file = (Object.const_source_location(klass.name)&.first if klass.name) rescue nil
-      status = if result.skipped? then "skip"
-               elsif result.passed? then "pass"
-               else "fail"
-               end
-      { id: "#{klass.name}##{test.name}", file: relative(class_file || method_file), line:, status:,
-        ms: (result.time * 1000).round(1) }
+      class_file = (Object.const_source_location(test.class.name)&.first if test.class.name) rescue nil
+      [relative(class_file || method_file), line]
     end
 
     # Watches requires, so the hooks go in as soon as Minitest or RSpec has loaded.
@@ -183,6 +232,9 @@ module Pitstop
     end
   end
 end
+
+# Forked workers that end without returning to Minitest.run still get their last file written.
+at_exit { Pitstop::Record.flush_group } if Pitstop::Record::GRANULARITY == "file"
 
 Coverage.setup(lines: true, eval: true)
 Coverage.resume
