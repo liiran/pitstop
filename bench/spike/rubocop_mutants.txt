@@ -1,0 +1,4 @@
+lib/rubocop/cop/style/negated_if.rb | return if node.unless? || node.elsif? || node.ternary? | return if node.unless? || node.ternary?
+lib/rubocop/cop/style/redundant_self.rb | return if multiple_assignment_target?(node) | return if false && multiple_assignment_target?(node)
+lib/rubocop/cop/style/yoda_condition.rb | return unless yoda_compatible_condition?(node) | return if yoda_compatible_condition?(node)
+lib/rubocop/cop/mixin/configurable_enforced_style.rb | if supported_styles.size != 2 | if supported_styles.size != 3

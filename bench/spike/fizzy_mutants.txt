@@ -1,0 +1,8 @@
+app/models/card/closeable.rb | closure.present? | closure.blank?
+app/models/card/golden.rb | goldness.present? | goldness.blank?
+app/models/card/postponable.rb | && !postponed? | && postponed?
+app/models/card/assignable.rb | a.assignee_id == user.id | a.assignee_id != user.id
+app/models/card/entropic.rb | entropy.present? | entropy.blank?
+app/models/card/stallable.rb |       open? && last_activity_spike_at |       !open? && last_activity_spike_at
+app/models/card/stallable.rb | STALLED_AFTER_LAST_SPIKE_PERIOD = 14.days | STALLED_AFTER_LAST_SPIKE_PERIOD = 1.day
+app/models/card/closeable.rb | closure&.user | closure&.user&.then { nil }

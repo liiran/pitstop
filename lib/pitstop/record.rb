@@ -60,8 +60,10 @@ module Pitstop
         ranges
       end
 
-      # Called once in the main process just before the first test: load the whole app, so code that
-      # runs while classes load is counted as boot instead of landing on whichever test loaded it.
+      # Called once in the main process when the test files have loaded and tests are about to start
+      # (just before parallel workers fork, or before the first test): load the whole app, so code
+      # that runs while classes load is counted as boot instead of landing on whichever test
+      # happened to load it first.
       def boot!
         return if @booted
 
@@ -74,7 +76,15 @@ module Pitstop
         return if ENV["PITSTOP_EAGER_LOAD"] == "0"
         return unless defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
 
-        ::Rails.application.eager_load!
+        # One loader at a time: an app can have a loader that's never set up in tests (Rails'
+        # application-wide eager_load! then gives up on all of them).
+        return ::Rails.application.eager_load! unless ::Rails.respond_to?(:autoloaders)
+
+        ::Rails.autoloaders.each do |loader|
+          loader.eager_load
+        rescue StandardError => e
+          warn "pitstop: skipped loading #{loader.tag rescue 'a loader'} up front (#{e.class}: #{e.message.lines.first&.strip})" unless e.class.name == "Zeitwerk::SetupRequired"
+        end
       rescue StandardError => e
         warn "pitstop: couldn't load the whole app first (#{e.class}: #{e.message}); continuing"
       end
@@ -84,6 +94,16 @@ module Pitstop
       #
       # A fork made from inside a test (the test's own subprocess) records nothing: its lines belong
       # to that test, and counting them as start-up would make them look like boot code.
+      def before_fork
+        boot! if @tests_loading && !@in_test
+      end
+
+      # Minitest.run has begun; with Rails' runner the test files (and the app) load after this,
+      # so it's too early to call it boot.
+      def tests_loading!
+        @tests_loading = true
+      end
+
       def after_fork
         @shard = nil
         @group = nil
@@ -98,6 +118,7 @@ module Pitstop
       # after would hand this test's lines to the previous file (tests run in random order, so
       # that file can be anything).
       def test_started(file)
+        boot!
         @in_test = true
         return unless GRANULARITY == "file"
 
@@ -147,19 +168,35 @@ module Pitstop
         path.to_s.delete_prefix("#{ROOT}/")
       end
 
-      def install_hooks
-        install_minitest if !@minitest && defined?(::Minitest::Test) && defined?(::Minitest.run)
-        install_rspec if !@rspec && defined?(::RSpec::Core::Configuration) && ::RSpec.respond_to?(:configure)
+      # Puts the hooks in the moment Minitest::Test or RSpec's runner is first defined. Watching
+      # class definitions (not wrapping Kernel#require) keeps out of the way of Bootsnap, Zeitwerk
+      # and Ruby's own bundled-gems shim, which all rename `require` and would loop through a
+      # wrapper.
+      def watch_for_frameworks
+        @watch = TracePoint.new(:class) do |tp|
+          case tp.self.name
+          when "Minitest::Test" then install_minitest
+          when "RSpec::Core::Runner" then tp.self.singleton_class.prepend(RSpecRun)
+          end
+        end
+        @watch.enable
       end
 
       def install_minitest
+        return if @minitest
+
         @minitest = true
         ::Minitest.singleton_class.prepend(MinitestRun)
         ::Minitest::Test.prepend(MinitestTest)
       end
 
+      # Called as RSpec's runner starts, before spec files (and their spec_helper) load, so this
+      # around hook wraps every other one.
       def install_rspec
+        return if @rspec
+
         @rspec = true
+        @watch&.disable
         ::RSpec.configure do |config|
           config.before(:suite) { Pitstop::Record.boot! }
           config.after(:suite) { Pitstop::Record.flush_group }
@@ -184,7 +221,7 @@ module Pitstop
     # Minitest.run happens once, in the main process, before parallel workers start.
     module MinitestRun
       def run(*)
-        Pitstop::Record.boot!
+        Pitstop::Record.tests_loading!
         super
       ensure
         Pitstop::Record.flush_group
@@ -214,17 +251,16 @@ module Pitstop
       [relative(class_file || method_file), line]
     end
 
-    # Watches requires, so the hooks go in as soon as Minitest or RSpec has loaded.
-    module RequireWatch
-      def require(path)
-        loaded = super
-        Pitstop::Record.install_hooks if loaded
-        loaded
+    module RSpecRun
+      def run(*)
+        Pitstop::Record.install_rspec
+        super
       end
     end
 
     module ForkWatch
       def _fork
+        Pitstop::Record.before_fork
         pid = super
         Pitstop::Record.after_fork if pid.zero?
         pid
@@ -238,5 +274,5 @@ at_exit { Pitstop::Record.flush_group } if Pitstop::Record::GRANULARITY == "file
 
 Coverage.setup(lines: true, eval: true)
 Coverage.resume
-Kernel.prepend(Pitstop::Record::RequireWatch)
+Pitstop::Record.watch_for_frameworks
 Process.singleton_class.prepend(Pitstop::Record::ForkWatch) if Process.respond_to?(:_fork)
