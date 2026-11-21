@@ -75,6 +75,57 @@ class UnitDiffTest < Minitest::Test
     assert_equal [[:skeleton, nil]], summary(swapped)
   end
 
+  CONCERN = <<~'RUBY'
+    module Shop
+      module Billing
+        class Invoice < Base
+          included do
+            before_save { self.total ||= 0 }
+          end
+
+          class_methods do
+            def build = new
+          end
+
+          private def secret
+            42
+          end
+
+          define_method(:doubled) { total * 2 }
+
+          def twice
+            1
+          end
+
+          def twice
+            2
+          end
+        end
+      end
+    end
+
+    class Shop::Cart
+      def self.make = new
+    end
+  RUBY
+
+  def concern(from, to) = Pitstop::UnitDiff.compare(CONCERN, CONCERN.sub(from, to)).map { [_1.kind, _1.key] }
+
+  def test_names_follow_nesting_concerns_and_modifiers
+    assert_equal [[:changed, "Shop::Billing::Invoice before_save"]], concern("||= 0", "||= 1")
+    assert_equal [[:changed, "Shop::Billing::Invoice.build"]], concern("def build = new", "def build = new(1)"), "class_methods do… defines class methods"
+    assert_equal [[:changed, "Shop::Billing::Invoice#secret"]], concern("42", "43")
+    assert_equal [[:changed, "Shop::Billing::Invoice define_method(:doubled)"]], concern("total * 2", "total * 3")
+    assert_equal [[:changed, "Shop::Cart.make"]], concern("def self.make = new", "def self.make = new(1)")
+  end
+
+  # The second `twice` replaces the first; each is its own unit, numbered in order.
+  def test_a_method_defined_twice
+    assert_equal [[:changed, "Shop::Billing::Invoice#twice (2)"]], concern("      2\n", "      3\n")
+    found = Pitstop::UnitDiff.compare(CONCERN, CONCERN.sub(/      def twice\n        2\n      end\n/, ""))
+    assert_equal [[:removed, "Shop::Billing::Invoice#twice (2)"]], found.map { [_1.kind, _1.key] }
+  end
+
   def test_a_file_that_no_longer_parses
     assert_equal :unparsable, changes(BASE.sub("def total", "def total(")).first.kind
   end

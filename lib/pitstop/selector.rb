@@ -116,11 +116,13 @@ module Pitstop
     end
 
     # Templates and other files Ruby's coverage can see (ERB is compiled to Ruby with its own path).
+    # A new template is only rendered once some code names it, and that code change is picked up
+    # on its own; any other new file (data, settings) may be read by a glob, so it runs everything.
     def other_file(path, status, verdict)
       if @map.covered?(path)
         note(path, status == "D" ? "file deleted: every test that ran it" : "every test that ran this file", @map.tests_touching(path))
-      elsif status == "A"
-        note(path, "new file, not used by any recorded test", [])
+      elsif status == "A" && @rules.other_kind(path) == "template"
+        note(path, "new template, not rendered by any recorded test", [])
       else
         run_all(path, verdict.reason.sub(" (not followed yet)", ", not seen by any recorded test"))
       end

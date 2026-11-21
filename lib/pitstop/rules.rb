@@ -12,7 +12,7 @@ module Pitstop
 
     DEFAULTS = {
       "ignore" => %w[
-        **/*.md **/*.markdown **/*.txt **/*.rdoc LICENSE* CHANGELOG* CHANGES* NEWS* AUTHORS*
+        .pitstop/** **/*.md **/*.markdown **/*.txt **/*.rdoc LICENSE* CHANGELOG* CHANGES* NEWS* AUTHORS*
         docs/** doc/** changelog/** relnotes/** .github/** .gitlab/** .circleci/** .buildkite/**
         .gitignore .gitattributes .editorconfig .rubocop*.yml .yardopts .dockerignore .devcontainer/**
         **/.keep **/.gitkeep

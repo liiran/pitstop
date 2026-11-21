@@ -52,7 +52,7 @@ module Pitstop
 
     # A file's content at a commit, or nil if it didn't exist there.
     def show(sha, path)
-      out, status = Open3.capture2("git", "-C", @root, "show", "#{sha}:#{path}", binmode: true)
+      out, _, status = Open3.capture3("git", "-C", @root, "show", "#{sha}:#{path}", binmode: true)
       status.success? ? out.force_encoding(Encoding::UTF_8) : nil
     end
 

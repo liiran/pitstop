@@ -21,40 +21,71 @@ module Pitstop
 
     attr_reader :commit, :dirty, :tests, :boot, :files, :framework
 
+    # Raised when the recording can't give a correct map.
+    class Error < StandardError; end
+
+    # Problems found while merging that don't stop the map from being saved, but would make it
+    # miss tests. `pitstop record` prints them.
+    attr_reader :warnings
+
     def self.build(shard_dir, commit:, dirty: [])
       records = Dir[File.join(shard_dir, "*.jsonl")].sort.flat_map do |path|
         File.foreach(path).map { JSON.parse(_1) }
       end
-      raise ArgumentError, "no recorded tests in #{shard_dir}" if records.none? { _1["kind"] == "test" }
+      error = records.find { _1["kind"] == "error" }
+      raise Error, error["message"] if error
+      raise Error, "no tests were recorded (did the test command run any?)" if records.none? { _1["kind"] == "test" }
 
+      by_kind = records.group_by { _1["kind"] }
       tests = {}
-      groups = []
-      boot = Hash.new { |h, k| h[k] = [] }
-      by_file = Hash.new { |h, k| h[k] = Hash.new { |hh, kk| hh[kk] = [] } }
-      records.each do |r|
-        case r["kind"]
-        when "test" then tests[r["id"]] = r # a test recorded twice (a retry) keeps its last run
-        when "group" then groups << r
-        else r["cov"].each { |path, ranges| boot[path].concat(ranges) }
-        end
-      end
+      by_kind.fetch("test", []).each { tests[_1["id"]] = _1 } # a test recorded twice (a retry) keeps its last run
       list = tests.values
       number = list.each_with_index.to_h { |r, i| [r["id"], i] }
-      list.each_with_index do |r, i|
-        r["cov"]&.each { |path, ranges| by_file[path][ranges] << i }
-      end
+      in_file = Hash.new { |h, k| h[k] = [] }
+      list.each_with_index { |r, i| in_file[r["file"]] << i }
+
+      by_file = Hash.new { |h, k| h[k] = Hash.new { |hh, kk| hh[kk] = [] } }
+      add = ->(cov, idx) { cov.each { |path, ranges| by_file[path][ranges].concat(idx) } }
+      list.each_with_index { |r, i| add.(r["cov"], [i]) if r["cov"] }
       # Recorded per test file: every test in the file shares the file's lines.
-      groups.each do |g|
-        idx = g["tests"].filter_map { number[_1] }
-        g["cov"].each { |path, ranges| by_file[path][ranges].concat(idx) }
+      by_kind.fetch("group", []).each { |g| add.(g["cov"], g["tests"].filter_map { number[_1] }) }
+      # Setup shared by a spec file (before(:context)): every test in that file.
+      by_kind.fetch("between", []).each { |b| add.(b["cov"], in_file[b["file"]]) if in_file.key?(b["file"]) }
+      # A subprocess or fork a test started.
+      by_kind.fetch("child", []).each { |c| add.(c["cov"], [number[c["test"]]]) if number[c["test"]] }
+
+      boot = Hash.new { |h, k| h[k] = [] }
+      (by_kind.fetch("boot", []) + by_kind.fetch("worker_boot", [])).each do |r|
+        r["cov"].each { |path, ranges| boot[path].concat(ranges) }
       end
-      new(
+
+      map = new(
         "version" => VERSION, "commit" => commit, "dirty" => dirty,
         "framework" => list.first["framework"],
         "tests" => list.map { [_1["id"], _1["file"], _1["line"], _1["status"], _1["ms"]] },
         "boot" => boot.transform_values { merge_ranges(_1) },
-        "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx.uniq] } }
+        "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx.uniq.sort] } }
       )
+      map.check(by_kind)
+      map
+    end
+
+    def check(by_kind)
+      summaries = by_kind.fetch("summary", [])
+      ran = summaries.sum { _1["ran"] }
+      if summaries.empty?
+        @warnings << "couldn't confirm every test was recorded: the test run never reported its total (did it stop early?)"
+      elsif ran > tests.size
+        @warnings << "#{ran - tests.size} of #{ran} tests ran without being recorded, so they'll only run when their own test file changes"
+      end
+
+      unseen = by_kind.fetch("boot", []).flat_map { _1["unseen"] || [] }.uniq.sort
+      unless unseen.empty?
+        one = unseen.size == 1
+        @warnings << "#{unseen.size} project #{one ? 'file' : 'files'} loaded before coverage started, so no test is linked " \
+                     "to #{one ? 'it' : 'them'}: #{unseen.first(5).join(', ')}#{', …' if unseen.size > 5}. " \
+                     "Is something loading code before Pitstop (another RUBYOPT -r, a preloader such as Spring)?"
+      end
     end
 
     def self.merge_ranges(ranges)
@@ -69,7 +100,7 @@ module Pitstop
 
     def self.load(path)
       data = Zlib::GzipReader.open(path) { JSON.parse(_1.read) }
-      raise ArgumentError, "#{path} is map version #{data['version']}, expected #{VERSION}" unless data["version"] == VERSION
+      raise Error, "#{path} is from another version of Pitstop: run `pitstop record` again" unless data["version"] == VERSION
 
       new(data)
     end
@@ -82,6 +113,7 @@ module Pitstop
       @tests = data["tests"].each_with_index.map { |(id, file, line, status, ms), i| Test.new(i, id, file, line, status, ms) }
       @boot = data["boot"]
       @files = data["files"]
+      @warnings = []
     end
 
     def save(path)

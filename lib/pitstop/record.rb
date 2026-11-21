@@ -5,7 +5,19 @@
 # It starts Ruby's coverage before any app code loads, then writes one line per finished test
 # saying which lines of the project that test ran. It must not require any gem here: the app's
 # Bundler hasn't chosen gem versions yet, and loading one early can clash with the Gemfile.
+#
+# What it writes, one JSON object per line, to .pitstop/runs/<id>/<pid>.jsonl:
+#
+#   boot         lines that ran while the app and the test files loaded
+#   worker_boot  lines a parallel worker ran as it started
+#   test         one finished test, with the lines it ran (unless recorded per file)
+#   group        per-file recording: the lines all the tests of one test file ran
+#   between      RSpec setup shared by a whole spec file (before(:context) and friends)
+#   child        lines a subprocess ran for the test that started it
+#   summary      how many tests the framework says it ran, to check none went unrecorded
+#   error        something that makes the map wrong, such as tests running on threads
 require "coverage"
+require_relative "watch"
 
 module Pitstop
   module Record
@@ -16,26 +28,39 @@ module Pitstop
     # runs, so which test ran which line of a test file is never needed, and skipping test files
     # keeps reading coverage cheap on suites with thousands of them.
     SKIP = %r{\A(vendor|tmp|node_modules|\.bundle|\.pitstop)/|\A(test|spec)/.*_(test|spec)\.rb\z}
+    OWN_FILES = "#{File.expand_path('..', __dir__)}/".freeze
 
     # "test" reads coverage after every test. "file" reads it once per test file and gives every
     # test in the file the same lines: far cheaper for suites of tiny tests (RuboCop's take ~2 ms
-    # each), and selection then runs whole test files.
-    GRANULARITY = ENV.fetch("PITSTOP_GRANULARITY", "test")
+    # each), and selection then runs whole test files. "auto" (the default) starts per test and
+    # switches a process to per file once reading coverage costs more than half the tests' own time.
+    GRANULARITY = ENV.fetch("PITSTOP_GRANULARITY", "auto")
+    AUTO_CHECK_EVERY = 100 # tests
 
-    @parent_pid = Process.pid
-    @group = nil
+    # Set while a test runs, so a Ruby process the test starts (which inherits RUBYOPT) knows its
+    # lines belong to that test.
+    TEST_ENV = "PITSTOP_TEST"
+
+    @per_file = GRANULARITY == "file"
+    @child_of = ENV[TEST_ENV]
     @booted = false
+    @test = nil
+    @group = nil
     @shard = nil
     @shard_pid = nil
+    @auto = { tests: 0, take_ms: 0.0, test_ms: 0.0 }
+    @lock = Mutex.new
 
     class << self
       # Coverage since the last read, kept only for project files, as {path => [[first, last], ...]}
-      # of the lines that ran at least once.
-      def take
+      # of the lines that ran at least once. `seen`, if given, collects every project file Ruby
+      # is tracking, ran or not.
+      def take(seen = nil)
         out = {}
         Coverage.result(stop: false, clear: true).each do |path, data|
           next unless path.start_with?(PREFIX)
 
+          seen[path] = true if seen
           lines = data[:lines]
           next if lines.nil? || lines.compact.sum.zero? # cheap, in C: most files ran nothing
 
@@ -60,16 +85,33 @@ module Pitstop
         ranges
       end
 
+      def child? = !@child_of.nil?
+
       # Called once in the main process when the test files have loaded and tests are about to start
       # (just before parallel workers fork, or before the first test): load the whole app, so code
       # that runs while classes load is counted as boot instead of landing on whichever test
       # happened to load it first.
       def boot!
-        return if @booted
+        return if @booted || child?
 
         @booted = true
         eager_load
-        write(kind: "boot", cov: take)
+        seen = {}
+        cov = take(seen)
+        write(kind: "boot", cov:, unseen: unseen_files(seen))
+      end
+
+      # Project files Ruby loaded that coverage isn't tracking: they loaded before coverage started
+      # (another RUBYOPT -r, a preloader) or bypassed it (a precompiled-code cache). No test would
+      # ever be linked to them.
+      def unseen_files(seen)
+        $LOADED_FEATURES.filter_map do |path|
+          next unless path.start_with?(PREFIX) && path.end_with?(".rb")
+          next if seen.key?(path) || path.start_with?(OWN_FILES)
+
+          relative = path.delete_prefix(PREFIX)
+          relative unless relative.match?(SKIP)
+        end
       end
 
       def eager_load
@@ -89,54 +131,104 @@ module Pitstop
         warn "pitstop: couldn't load the whole app first (#{e.class}: #{e.message}); continuing"
       end
 
-      # In a freshly forked worker: whatever ran since the last read happened while the worker
-      # started up, not in a test.
-      #
-      # A fork made from inside a test (the test's own subprocess) records nothing: its lines belong
-      # to that test, and counting them as start-up would make them look like boot code.
-      def before_fork
-        boot! if @tests_loading && !@in_test
-      end
-
       # Minitest.run has begun; with Rails' runner the test files (and the app) load after this,
       # so it's too early to call it boot.
       def tests_loading!
         @tests_loading = true
       end
 
+      def before_fork
+        boot! if @tests_loading && !@test && !child?
+      end
+
+      # In a freshly forked parallel worker, whatever ran since the last read happened while the
+      # worker started up. A fork made by a test is that test's own helper process: its lines
+      # belong to the test.
       def after_fork
         @shard = nil
         @group = nil
-        if @in_test
-          @silent = true
-        else
+        if @test
+          become_child(@test[:id])
+        elsif !child?
           write(kind: "worker_boot", cov: take)
         end
       end
 
-      # Per test file, the previous file's lines are read here, before this test runs: reading them
-      # after would hand this test's lines to the previous file (tests run in random order, so
-      # that file can be anything).
-      def test_started(file)
-        boot!
-        @in_test = true
-        return unless GRANULARITY == "file"
+      def become_child(id)
+        @child_of = id
+        at_exit { Pitstop::Record.child_finished }
+      end
 
-        flush_group if @group && @group[:file] != file
-        @group ||= { file:, tests: [] }
+      def child_finished
+        cov = take
+        write(kind: "child", test: @child_of, cov:) unless cov.empty?
+      end
+
+      # RSpec is about to run a spec file's top-level group, starting with its before(:context)
+      # hooks: lines from those hooks belong to every example in the file, not to whichever
+      # example happens to run first.
+      def context_started(file)
+        return if child?
+
+        if @per_file
+          start_group(file)
+        else
+          shared = take # the previous group's after(:context) hooks
+          write(kind: "between", file: @last_file, cov: shared) if @last_file && !shared.empty?
+          @context_file = file
+        end
+      end
+
+      def test_started(id, file)
+        return if child?
+
+        boot!
+        return threads! if @test && @test[:thread] != Thread.current
+
+        if @per_file
+          start_group(file)
+        elsif @context_file
+          shared = take # this file's before(:context) hooks
+          write(kind: "between", file: @context_file, cov: shared) unless shared.empty?
+          @context_file = nil
+        end
+        @test = { id:, thread: Thread.current }
+        ENV[TEST_ENV] = id
       end
 
       def test_finished(framework:, id:, file:, line:, status:, ms:)
-        @in_test = false
-        if GRANULARITY == "file"
+        return if child?
+
+        @test = nil
+        ENV.delete(TEST_ENV)
+        @last_file = file
+        if @per_file
           @group[:tests] << id if @group
           return write(kind: "test", framework:, id:, file:, line:, status:, ms:)
         end
 
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         cov = take
-        take_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(2)
+        take_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3)
         write(kind: "test", framework:, id:, file:, line:, status:, ms:, take_ms:, cov:)
+        auto_switch(take_ms, ms)
+      end
+
+      def auto_switch(take_ms, ms)
+        return unless GRANULARITY == "auto"
+
+        @auto[:tests] += 1
+        @auto[:take_ms] += take_ms
+        @auto[:test_ms] += ms.to_f
+        return unless (@auto[:tests] % AUTO_CHECK_EVERY).zero? && @auto[:take_ms] > @auto[:test_ms] / 2
+
+        @per_file = true
+        write(kind: "switched", after: @auto[:tests], take_ms: @auto[:take_ms].round, test_ms: @auto[:test_ms].round)
+      end
+
+      def start_group(file)
+        flush_group if @group && @group[:file] != file
+        @group ||= { file:, tests: [] }
       end
 
       # The lines every test of the current test file ran, together.
@@ -148,10 +240,23 @@ module Pitstop
         write(kind: "group", file: group[:file], tests: group[:tests], cov: take)
       end
 
-      def write(record)
-        return if @silent
+      def finished(framework:, ran:)
+        flush_group
+        write(kind: "summary", framework:, ran:) unless child?
+      end
 
-        shard.puts(JSON.generate(record.merge(pid: Process.pid)))
+      # Tests running at the same time on several threads share one coverage counter, so lines
+      # can't be told apart. Say so once and stop recording.
+      def threads!
+        message = "tests ran on several threads at once, so their lines can't be told apart. " \
+                  "Record with one thread (for Rails: parallelize(with: :processes), or PARALLEL_WORKERS=1)"
+        warn "pitstop: #{message}"
+        write(kind: "error", message:)
+        @child_of = "(stopped)"
+      end
+
+      def write(record)
+        @lock.synchronize { shard.puts(JSON.generate(record.merge(pid: Process.pid))) }
       end
 
       def shard
@@ -165,21 +270,7 @@ module Pitstop
       end
 
       def relative(path)
-        path.to_s.delete_prefix("#{ROOT}/")
-      end
-
-      # Puts the hooks in the moment Minitest::Test or RSpec's runner is first defined. Watching
-      # class definitions (not wrapping Kernel#require) keeps out of the way of Bootsnap, Zeitwerk
-      # and Ruby's own bundled-gems shim, which all rename `require` and would loop through a
-      # wrapper.
-      def watch_for_frameworks
-        @watch = TracePoint.new(:class) do |tp|
-          case tp.self.name
-          when "Minitest::Test" then install_minitest
-          when "RSpec::Core::Runner" then tp.self.singleton_class.prepend(RSpecRun)
-          end
-        end
-        @watch.enable
+        path.to_s.delete_prefix(PREFIX)
       end
 
       def install_minitest
@@ -190,8 +281,20 @@ module Pitstop
         ::Minitest::Test.prepend(MinitestTest)
       end
 
-      # Called as RSpec's runner starts, before spec files (and their spec_helper) load, so this
-      # around hook wraps every other one.
+      def count_minitest_results
+        return if @minitest_reporter
+
+        @minitest_reporter = true
+        @minitest_ran = 0
+        ::Minitest::CompositeReporter.prepend(MinitestReporter)
+      end
+
+      def minitest_result = @minitest_ran += 1
+
+      def minitest_finished = finished(framework: "minitest", ran: @minitest_ran.to_i)
+
+      # Called as RSpec's runner starts, before spec files (and their spec_helper) load, so these
+      # hooks wrap every other one.
       def install_rspec
         return if @rspec
 
@@ -199,14 +302,20 @@ module Pitstop
         @watch&.disable
         ::RSpec.configure do |config|
           config.before(:suite) { Pitstop::Record.boot! }
-          config.after(:suite) { Pitstop::Record.flush_group }
+          config.before(:context) do
+            Pitstop::Record.context_started(Pitstop::Record.relative(Pitstop::Watch.rspec_file(self.class.metadata)))
+          end
+          config.after(:suite) do
+            # Examples skipped up front (xit, skip: true) never run any hook, so they aren't counted.
+            ran = ::RSpec.configuration.reporter.examples.count { !_1.metadata[:skip] }
+            Pitstop::Record.finished(framework: "rspec", ran:)
+          end
           config.around(:each) do |example|
-            # The spec file that runs this example; for a shared example that's the file including it.
-            file = Pitstop::Record.relative(File.expand_path(example.metadata[:rerun_file_path] || example.metadata[:file_path]))
+            file = Pitstop::Record.relative(Pitstop::Watch.rspec_file(example.metadata))
             started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            Pitstop::Record.test_started(file)
+            Pitstop::Record.test_started(example.id, file)
             example.run
-            ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(1)
+            ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3)
             status = if example.exception then "fail"
                      elsif example.pending? || example.skipped? then "skip"
                      else "pass"
@@ -216,39 +325,47 @@ module Pitstop
           end
         end
       end
+
+      def watch_for_frameworks
+        @watch = Watch.frameworks(minitest: -> { install_minitest },
+                                  rspec: ->(runner) { runner.singleton_class.prepend(RSpecRun) })
+      end
     end
 
-    # Minitest.run happens once, in the main process, before parallel workers start.
+    # Minitest.run happens once, in the main process, before parallel workers start; every result
+    # (including those parallel workers send back) is recorded by its reporter there.
     module MinitestRun
       def run(*)
         Pitstop::Record.tests_loading!
+        Pitstop::Record.count_minitest_results
         super
       ensure
-        Pitstop::Record.flush_group
+        Pitstop::Record.minitest_finished
+      end
+    end
+
+    module MinitestReporter
+      def record(result)
+        Pitstop::Record.minitest_result
+        super
       end
     end
 
     module MinitestTest
       def run
-        file, line = Pitstop::Record.minitest_location(self)
-        Pitstop::Record.test_started(file)
+        klass = self.class
+        id = "#{Watch::MODULE_NAME.bind_call(klass)}##{name}"
+        file = Pitstop::Record.relative(Watch.minitest_file(klass, name))
+        Pitstop::Record.test_started(id, file)
         result = super
         status = if result.skipped? then "skip"
                  elsif result.passed? then "pass"
                  else "fail"
                  end
-        Pitstop::Record.test_finished(framework: "minitest", id: "#{self.class.name}##{name}", file:, line:,
-                                      status:, ms: (result.time * 1000).round(1))
+        Pitstop::Record.test_finished(framework: "minitest", id:, file:, line: Watch.minitest_line(klass, name),
+                                      status:, ms: (result.time * 1000).round(3))
         result
       end
-    end
-
-    # The file that defines the test class (so tests mixed in from a module still map to the test
-    # file that runs them), and the test method's line.
-    def self.minitest_location(test)
-      method_file, line = test.method(test.name).source_location rescue [nil, nil]
-      class_file = (Object.const_source_location(test.class.name)&.first if test.class.name) rescue nil
-      [relative(class_file || method_file), line]
     end
 
     module RSpecRun
@@ -269,10 +386,14 @@ module Pitstop
   end
 end
 
-# Forked workers that end without returning to Minitest.run still get their last file written.
-at_exit { Pitstop::Record.flush_group } if Pitstop::Record::GRANULARITY == "file"
-
 Coverage.setup(lines: true, eval: true)
 Coverage.resume
-Pitstop::Record.watch_for_frameworks
 Process.singleton_class.prepend(Pitstop::Record::ForkWatch) if Process.respond_to?(:_fork)
+if Pitstop::Record.child?
+  # Started from inside a test: everything this process runs belongs to that test.
+  at_exit { Pitstop::Record.child_finished }
+else
+  # Forked workers that end without returning to Minitest.run still get their last file written.
+  at_exit { Pitstop::Record.flush_group }
+  Pitstop::Record.watch_for_frameworks
+end

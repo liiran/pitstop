@@ -105,5 +105,42 @@ class SelectorTest < Minitest::Test
 
   def test_files_uncommitted_when_the_map_was_made_take_every_test_that_ran_them
     assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(select([], dirty: ["app/models/cart.rb"]))
+    assert select([], dirty: ["Gemfile.lock"]).all?
+    assert_empty ids(select([], dirty: ["README.md"]))
+  end
+
+  def test_a_removed_method_selects_the_tests_that_ran_it
+    removed = CART.sub(/  def full\?\n.*?\n  end\n/m, "")
+    s = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => removed })
+    assert_equal ["CartTest#test_full"], ids(s)
+    assert_includes s.reasons.map(&:what), "Cart#full? removed"
+  end
+
+  def test_an_added_method_or_a_file_that_no_longer_parses_selects_every_test_that_ran_the_file
+    added = CART.sub("  def label", "  def empty? = items.empty?\n\n  def label")
+    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => added }))
+    broken = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub("def total", "def total(") })
+    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(broken)
+    assert_match(/doesn't parse/, broken.reasons.first.what)
+  end
+
+  def test_new_files
+    assert_empty ids(select([["A", "app/models/coupon.rb"]])), "a new Ruby file is only reached through a change that names it"
+    assert_empty ids(select([["A", "app/views/carts/_coupon.html.erb"]])), "same for a new template"
+    refute select([["A", "app/views/carts/_coupon.html.erb"]]).all?
+    assert select([["A", "app/data/rates.json"]]).all?, "a new data file may be read by a glob"
+  end
+
+  def test_deleted_files
+    assert_equal ["CartsControllerTest#test_show"], ids(select([["D", "app/views/carts/show.html.erb"]]))
+    assert select([["D", "app/data/rates.json"]]).all?, "a deleted file no test was seen reading"
+    deleted_test = select([["D", "test/cart_test.rb"]])
+    assert_empty deleted_test.files
+    assert_empty ids(deleted_test)
+  end
+
+  def test_a_renamed_test_file_runs_whole_under_its_new_name
+    s = select([["R", "test/basket_test.rb", "test/cart_test.rb"]])
+    assert_equal ["test/basket_test.rb"], s.files.to_a
   end
 end
