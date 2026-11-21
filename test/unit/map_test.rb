@@ -75,6 +75,8 @@ class MapTest < Minitest::Test
 
   def test_warns_when_the_framework_ran_more_tests_than_were_recorded
     assert_match "2 of 3 tests ran without being recorded", build([rec("A#a"), summary(3)]).warnings.join
+    named = summary(2).merge("framework" => "rspec", "unrecorded" => ["./spec/a_spec.rb[1:2]"])
+    assert_match "only run when their own test file changes: ./spec/a_spec.rb[1:2]", build([rec("A#a"), named]).warnings.join
     assert_match "never reported its total", build([rec("A#a")]).warnings.join
     assert_empty build([rec("A#a"), rec("A#b"), summary(1)], [summary(1)]).warnings, "totals add up across processes"
   end

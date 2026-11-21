@@ -50,6 +50,7 @@ module Pitstop
     @shard_pid = nil
     @auto = { tests: 0, take_ms: 0.0, test_ms: 0.0 }
     @lock = Mutex.new
+    @recorded = {}
 
     class << self
       # Coverage since the last read, kept only for project files, as {path => [[first, last], ...]}
@@ -202,6 +203,7 @@ module Pitstop
         @test = nil
         ENV.delete(TEST_ENV)
         @last_file = file
+        @recorded[id] = status
         if @per_file
           @group[:tests] << id if @group
           return write(kind: "test", framework:, id:, file:, line:, status:, ms:)
@@ -240,10 +242,28 @@ module Pitstop
         write(kind: "group", file: group[:file], tests: group[:tests], cov: take)
       end
 
-      def finished(framework:, ran:)
+      def finished(framework:, ran:, unrecorded: nil)
         flush_group
-        write(kind: "summary", framework:, ran:) unless child?
+        write({ kind: "summary", framework:, ran:, unrecorded: }.compact) unless child?
       end
+
+      # A test's final result, once its framework has decided it. A test the hooks never saw run
+      # is recorded with no lines (as failed or skipped, it always runs); one whose result
+      # changed after the hooks finished gets its status corrected.
+      def result(id:, status:)
+        return if child?
+
+        if !@recorded.key?(id)
+          @recorded[id] = status
+          write(kind: "test", id:, status:, ms: 0, **yield)
+        elsif @recorded[id] != status
+          @recorded[id] = status
+          write(kind: "status", id:, status:)
+        end
+      end
+
+      # Up to 20 of these test ids that this process never recorded, to name in the warning.
+      def unrecorded(ids) = ids.reject { @recorded.key?(_1) }.first(20)
 
       # Tests running at the same time on several threads share one coverage counter, so lines
       # can't be told apart. Say so once and stop recording.
@@ -301,27 +321,38 @@ module Pitstop
         @rspec = true
         @watch&.disable
         ::RSpec.configure do |config|
-          config.before(:suite) { Pitstop::Record.boot! }
+          config.before(:suite) do
+            Pitstop::Record.boot!
+            ::RSpec.configuration.reporter.register_listener(RSpecResults, :example_finished)
+          end
           config.before(:context) do
             Pitstop::Record.context_started(Pitstop::Record.relative(Pitstop::Watch.rspec_file(self.class.metadata)))
           end
           config.after(:suite) do
-            # Examples skipped up front (xit, skip: true) never run any hook, so they aren't counted.
-            ran = ::RSpec.configuration.reporter.examples.count { !_1.metadata[:skip] }
-            Pitstop::Record.finished(framework: "rspec", ran:)
+            ran = ::RSpec.configuration.reporter.examples.map(&:id)
+            Pitstop::Record.finished(framework: "rspec", ran: ran.size, unrecorded: Pitstop::Record.unrecorded(ran))
           end
           config.around(:each) do |example|
             file = Pitstop::Record.relative(Pitstop::Watch.rspec_file(example.metadata))
             started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             Pitstop::Record.test_started(example.id, file)
-            example.run
-            ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3)
-            status = if example.exception then "fail"
-                     elsif example.pending? || example.skipped? then "skip"
-                     else "pass"
-                     end
-            Pitstop::Record.test_finished(framework: "rspec", id: example.id, file:,
-                                          line: example.metadata[:line_number], status:, ms:)
+            raised = nil
+            begin
+              example.run
+            rescue Exception => e # rubocop:disable Lint/RescueException
+              # aggregate_failures (and some around hooks) raise the failure out through every
+              # around hook; it's still a finished, failed example.
+              raised = e
+              raise
+            ensure
+              ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3)
+              status = if raised || example.exception then "fail"
+                       elsif example.pending? || example.skipped? then "skip"
+                       else "pass"
+                       end
+              Pitstop::Record.test_finished(framework: "rspec", id: example.id, file:,
+                                            line: example.metadata[:line_number], status:, ms:)
+            end
           end
         end
       end
@@ -372,6 +403,23 @@ module Pitstop
       def run(*)
         Pitstop::Record.install_rspec
         super
+      end
+    end
+
+    # RSpec decides an example's result after every around hook has returned (aggregate_failures
+    # wraps them all), and some examples never reach the around hooks: those skipped up front,
+    # and those failed by an error in their group's before(:context). The reporter hears the final
+    # result of every one.
+    module RSpecResults
+      STATUS = { passed: "pass", failed: "fail", pending: "skip" }.freeze
+
+      def self.example_finished(notification)
+        example = notification.example
+        status = STATUS.fetch(example.execution_result.status, "fail")
+        Pitstop::Record.result(id: example.id, status:) do
+          { framework: "rspec", file: Pitstop::Record.relative(Watch.rspec_file(example.metadata)),
+            line: example.metadata[:line_number] }
+        end
       end
     end
 

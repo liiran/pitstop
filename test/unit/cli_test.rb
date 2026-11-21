@@ -332,12 +332,28 @@ class CLITest < Minitest::Test
         end
       end
     RUBY
-    "spec/other_spec.rb" => <<~RUBY
+    "spec/other_spec.rb" => <<~RUBY,
       RSpec.describe "other" do
         it("adds") { expect(1 + 1).to eq 2 }
       end
     RUBY
+    # Two ways an example ends without returning through the around hooks normally.
+    "spec/aggregate_spec.rb" => <<~RUBY,
+      require_relative "../lib/stock"
+      RSpec.describe "aggregated", :aggregate_failures do
+        it("checks twice") { s = Stock.new([]); expect(s.empty?).to be true; expect(s.count).to eq 0 }
+      end
+    RUBY
+    "spec/setup_spec.rb" => <<~RUBY
+      require_relative "../lib/stock"
+      RSpec.describe "set up once" do
+        before(:all) { raise "not empty" unless Stock.new([]).empty? }
+        it("works") { expect(1).to eq 1 }
+      end
+    RUBY
   }.freeze
+
+  EMPTY = %w[./spec/aggregate_spec.rb[1:1] ./spec/setup_spec.rb[1:1] ./spec/stock_spec.rb[1:2] ./spec/stock_spec.rb[1:3:1]].freeze
 
   def test_rspec_end_to_end
     skip "rspec not installed" unless Fixture.rspec?
@@ -345,20 +361,37 @@ class CLITest < Minitest::Test
       shop.commit("start")
       code, out, err = shop.pitstop("record")
       assert_equal 0, code, out + err
-      assert_match "mapped 4 tests", out
+      assert_match "mapped 6 tests", out
+      assert_empty err.lines.grep(/warning/), err
 
       shop.edit("lib/stock.rb", "@items.empty?", "@items.none?")
-      assert_equal %w[./spec/stock_spec.rb[1:2] ./spec/stock_spec.rb[1:3:1]], picked(shop)
+      assert_equal EMPTY, picked(shop), "before(:all) code belongs to every example in its file"
       code, out, err = shop.pitstop("run")
       assert_equal 0, code, out + err
-      assert_match "2 examples, 0 failures", out
-      assert_match "Pitstop: ran 2 of 2 selected tests", out
+      assert_match "4 examples, 0 failures", out
+      assert_match "Pitstop: ran 4 of 4 selected tests", out
 
       shop.write("spec/new_spec.rb", "RSpec.describe('new') { it('works') { expect(1).to eq 1 } }\n")
       code, out, err = shop.pitstop("run")
       assert_equal 0, code, out + err
-      assert_match "3 examples, 0 failures", out
-      assert_match "Pitstop: ran 2 of 2 selected tests, plus 1 from whole test files", out
+      assert_match "5 examples, 0 failures", out
+      assert_match "Pitstop: ran 4 of 4 selected tests, plus 1 from whole test files", out
+    end
+  end
+
+  # Examples that fail without returning normally (an aggregated failure, or an error in their
+  # group's before(:all)) still ran: the check counts them, and the run reports the failure.
+  def test_rspec_failures_that_skip_the_around_hooks_still_count_as_run
+    skip "rspec not installed" unless Fixture.rspec?
+    Fixture.project(RSPEC.merge(".pitstop.yml" => "command: ruby bin/rspec\n")) do |shop|
+      shop.commit("start")
+      shop.pitstop("record")
+      shop.edit("lib/stock.rb", "@items.empty?", "!@items.empty?")
+      code, out, err = shop.pitstop("run")
+      assert_equal 1, code, out + err
+      assert_match "4 examples, 4 failures", out
+      assert_match "Pitstop: ran 4 of 4 selected tests", out
+      refute_match "didn't run", err
     end
   end
 end

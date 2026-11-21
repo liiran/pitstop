@@ -1,0 +1,6 @@
+# label | path | text to replace | replacement | expected
+comment only (only the always-run tests) | lib/rubocop/cop/style/negated_if.rb |         def on_if(node) |         # Checks every if.\n        def on_if(node) | pass
+method, same behaviour | lib/rubocop/cop/style/negated_if.rb | format(MSG, inverse: node.inverse_keyword, current: node.keyword) | format(MSG, current: node.keyword, inverse: node.inverse_keyword) | pass
+planted bug in a cop | lib/rubocop/cop/style/negated_if.rb | return if node.unless? || node.elsif? || node.ternary? | return if node.unless? || node.ternary? | fail
+planted bug in a shared mixin | lib/rubocop/cop/mixin/configurable_enforced_style.rb | if supported_styles.size != 2 | if supported_styles.size != 3 | fail
+spec file | spec/rubocop/cop/style/negated_if_spec.rb | RSpec.describe | # Same specs.\nRSpec.describe | pass

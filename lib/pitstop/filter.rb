@@ -61,16 +61,21 @@ module Pitstop
         return if @rspec
 
         @rspec = true
+        # The reporter hears about every example that finishes, however it ends: one whose failure
+        # is raised out through the around hooks (aggregate_failures), or one failed by an error
+        # in its group's before(:context). It exists by before(:suite).
         ::RSpec.configure do |config|
-          config.around(:each) do |example|
-            example.run
-            status = if example.exception then "fail"
-                     elsif example.pending? || example.skipped? then "skip"
-                     else "pass"
-                     end
-            Pitstop::Filter.ran(example.id, Pitstop::Watch.rspec_file(example.metadata), status)
-          end
+          config.before(:suite) { ::RSpec.configuration.reporter.register_listener(RSpecLog, :example_finished) }
         end
+      end
+    end
+
+    module RSpecLog
+      STATUS = { passed: "pass", failed: "fail", pending: "skip" }.freeze
+
+      def self.example_finished(notification)
+        example = notification.example
+        Pitstop::Filter.ran(example.id, Watch.rspec_file(example.metadata), STATUS.fetch(example.execution_result.status, "fail"))
       end
     end
 

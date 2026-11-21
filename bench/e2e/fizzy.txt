@@ -1,0 +1,7 @@
+# label | path | text to replace | replacement | expected
+comment only (only the always-run skipped tests) | app/models/card/closeable.rb |   def closed? |   # Closed once a closure exists.\n  def closed? | pass
+method, same behaviour | app/models/card/golden.rb | goldness.present? | !goldness.nil? | pass
+planted bug in a method | app/models/card/closeable.rb | closure.present? | closure.blank? | fail
+planted bug in a lambda scope | app/models/card/golden.rb | scope :golden, -> { joins(:goldness) } | scope :golden, -> { left_outer_joins(:goldness) } | fail
+template | app/views/cards/_delete.html.erb | <span>Delete this card</span> | <span>Delete card</span> | pass
+test file | test/models/card/closeable_test.rb |   setup do |   setup do\n    # same setup | pass

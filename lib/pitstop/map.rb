@@ -39,6 +39,8 @@ module Pitstop
       by_kind = records.group_by { _1["kind"] }
       tests = {}
       by_kind.fetch("test", []).each { tests[_1["id"]] = _1 } # a test recorded twice (a retry) keeps its last run
+      # The framework's final word on a result, decided after the test's own record was written.
+      by_kind.fetch("status", []).each { tests[_1["id"]]&.store("status", _1["status"]) }
       list = tests.values
       number = list.each_with_index.to_h { |r, i| [r["id"], i] }
       in_file = Hash.new { |h, k| h[k] = [] }
@@ -76,7 +78,9 @@ module Pitstop
       if summaries.empty?
         @warnings << "couldn't confirm every test was recorded: the test run never reported its total (did it stop early?)"
       elsif ran > tests.size
-        @warnings << "#{ran - tests.size} of #{ran} tests ran without being recorded, so they'll only run when their own test file changes"
+        named = summaries.flat_map { _1["unrecorded"] || [] }
+        @warnings << "#{ran - tests.size} of #{ran} tests ran without being recorded, so they'll only run when their own test file " \
+                     "changes#{": #{named.first(5).join(', ')}#{', …' if named.size > 5}" unless named.empty?}"
       end
 
       unseen = by_kind.fetch("boot", []).flat_map { _1["unseen"] || [] }.uniq.sort

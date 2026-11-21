@@ -294,8 +294,11 @@ class RecordTest < Minitest::Test
       [1, 2, 3].each do |seed|
         records = rspec(p.dir, "--order", "rand:#{seed}")
         tests = tests_by_id(records)
-        assert_equal %w[./spec/count_spec.rb[1:1] ./spec/count_spec.rb[1:2:1] ./spec/count_spec.rb[1:4] ./spec/shared_spec.rb[1:1:1]],
+        assert_equal %w[./spec/count_spec.rb[1:1] ./spec/count_spec.rb[1:2:1] ./spec/count_spec.rb[1:3] ./spec/count_spec.rb[1:4] ./spec/shared_spec.rb[1:1:1]],
                      tests.keys.sort, @output
+        skipped = tests.delete("./spec/count_spec.rb[1:3]")
+        assert_equal "skip", skipped["status"], "an example skipped up front is in the map, so it always runs"
+        assert_nil skipped["cov"]
         assert_equal [7], lines(tests["./spec/count_spec.rb[1:1]"]["cov"]["lib/stock.rb"])
         assert_equal [11], lines(tests["./spec/count_spec.rb[1:2:1]"]["cov"]["lib/stock.rb"])
         assert_equal "fail", tests["./spec/count_spec.rb[1:4]"]["status"]
@@ -303,10 +306,45 @@ class RecordTest < Minitest::Test
 
         # before(:all) ran Stock.seed once per file: every example in that file needs it.
         seeded = map.tests_touching("lib/stock.rb", 3..3).map { map.tests[_1].id }.sort
-        assert_equal tests.keys.sort, seeded, "seed #{seed}"
-        assert_equal 4, records.find { _1["kind"] == "summary" }["ran"], "examples skipped up front aren't counted"
+        assert_equal (tests.keys + ["./spec/count_spec.rb[1:3]"]).sort, seeded, "seed #{seed}"
+        assert_equal 5, records.find { _1["kind"] == "summary" }["ran"]
         assert_empty map.warnings
       end
+    end
+  end
+
+  # aggregate_failures raises its failure out through every around hook, past Pitstop's.
+  def test_rspec_failures_raised_through_around_hooks_are_still_recorded
+    skip "rspec not installed" unless Fixture.rspec?
+    Fixture.project(RSPEC.merge("spec/aggregate_spec.rb" => <<~RUBY)) do |p|
+      require_relative "../lib/stock"
+      RSpec.describe "aggregated", :aggregate_failures do
+        it("fails twice") { Stock.seed; expect(Stock.count).to eq 0; expect(Stock.empty?).to be true }
+      end
+    RUBY
+      rspec(p.dir, "spec/aggregate_spec.rb")
+      assert_match "Got 2 failures", @output
+      test = map.tests.find { _1.id == "./spec/aggregate_spec.rb[1:1]" }
+      assert_equal "fail", test.status, "RSpec decides it failed after every around hook returns"
+      assert_equal [test.index], map.tests_touching("lib/stock.rb", 11..11).to_a
+      assert_empty map.warnings
+    end
+  end
+
+  # An error in before(:all) fails every example of the group without running any of them.
+  def test_rspec_examples_failed_by_their_group_setup_are_in_the_map_as_failed
+    skip "rspec not installed" unless Fixture.rspec?
+    Fixture.project(RSPEC.merge("spec/setup_spec.rb" => <<~RUBY)) do |p|
+      RSpec.describe "broken setup" do
+        before(:all) { raise "no database" }
+        it("one") { expect(1).to eq 1 }
+        it("two") { expect(2).to eq 2 }
+      end
+    RUBY
+      rspec(p.dir, "spec/setup_spec.rb")
+      assert_equal [%w[./spec/setup_spec.rb[1:1] fail], %w[./spec/setup_spec.rb[1:2] fail]], map.tests.map { [_1.id, _1.status] }.sort
+      assert_equal "spec/setup_spec.rb", map.tests.first.file
+      assert_empty map.warnings
     end
   end
 
