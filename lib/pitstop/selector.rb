@@ -84,6 +84,7 @@ module Pitstop
     end
 
     def ruby_file(path, status)
+      return run_all(path, "loaded before Pitstop started recording, so no test is linked to it") if @map.unseen.include?(path)
       return note(path, "file deleted: every test that ran it", @map.tests_touching(path)) if status == "D"
       return note(path, "new file, not run by any recorded test", []) if status == "A"
 

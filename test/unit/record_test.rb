@@ -238,7 +238,7 @@ class RecordTest < Minitest::Test
     minitest_project("lib/early.rb" => "module Early\nend\n") do |p|
       env = { "RUBYOPT" => "-I#{p.dir}/lib -rearly -I#{Fixture::LIB} -rpitstop/record" }
       record(p.dir, ["test/all.rb"], env:)
-      assert_match "1 project file loaded before coverage started, so no test is linked to it: lib/early.rb", map.warnings.join
+      assert_match "1 project file loaded before coverage started, so no test is linked to it and changing it runs every test: lib/early.rb", map.warnings.join
     end
   end
 

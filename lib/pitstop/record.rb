@@ -45,6 +45,7 @@ module Pitstop
     @child_of = ENV[TEST_ENV]
     @booted = false
     @test = nil
+    @nested = 0
     @group = nil
     @shard = nil
     @shard_pid = nil
@@ -185,6 +186,9 @@ module Pitstop
 
         boot!
         return threads! if @test && @test[:thread] != Thread.current
+        # A test that runs another test inside itself (a test of a test helper, say): the inner
+        # test isn't one the framework schedules, so its lines are the outer test's.
+        return @nested += 1 if @test
 
         if @per_file
           start_group(file)
@@ -199,6 +203,7 @@ module Pitstop
 
       def test_finished(framework:, id:, file:, line:, status:, ms:)
         return if child?
+        return @nested -= 1 if @nested.positive?
 
         @test = nil
         ENV.delete(TEST_ENV)

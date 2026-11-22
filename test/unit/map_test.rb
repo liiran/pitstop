@@ -83,7 +83,7 @@ class MapTest < Minitest::Test
 
   def test_warns_about_project_files_coverage_never_saw
     map = build([{ "kind" => "boot", "cov" => {}, "unseen" => ["lib/early.rb"] }, rec("A#a"), summary(1)])
-    assert_match "1 project file loaded before coverage started, so no test is linked to it: lib/early.rb", map.warnings.join
+    assert_match "1 project file loaded before coverage started, so no test is linked to it and changing it runs every test: lib/early.rb", map.warnings.join
   end
 
   def test_a_recording_error_or_no_tests_at_all_is_an_error

@@ -23,6 +23,7 @@ class SelectorTest < Minitest::Test
   def map(dirty: [])
     Pitstop::Map.new(
       "version" => 1, "commit" => "abc", "dirty" => dirty, "framework" => "minitest",
+      "unseen" => ["lib/shop/version.rb"], # loaded by the gemspec before coverage started
       "tests" => [
         ["CartTest#test_total", "test/cart_test.rb", 3, "pass", 1.0],
         ["CartTest#test_full", "test/cart_test.rb", 7, "pass", 1.0],
@@ -53,6 +54,14 @@ class SelectorTest < Minitest::Test
     refute s.all?
     assert_equal ["CartTest#test_total"], ids(s)
     assert_includes s.reasons.map(&:what), "Cart#total changed"
+  end
+
+  # `bundle exec` loads a gem's gemspec, and the version file it requires, before Pitstop starts:
+  # no test is linked to that file, so a change to it can't be narrowed.
+  def test_a_file_loaded_before_recording_started_runs_everything
+    s = select([["M", "lib/shop/version.rb"]], now: { "lib/shop/version.rb" => "VERSION = '1.1.0'\n" })
+    assert s.all?
+    assert_equal "loaded before Pitstop started recording, so no test is linked to it", s.reasons.first.what
   end
 
   def test_tests_that_failed_when_the_map_was_made_always_run

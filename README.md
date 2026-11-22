@@ -53,10 +53,18 @@ recorded. If the map's commit isn't in your repo, everything runs.
 ## Checks it makes
 
 `pitstop record` warns when the map would miss tests: when the framework ran more tests than
-Pitstop recorded, or when project files loaded before coverage started (something else loaded
-them first, such as another `RUBYOPT -r` or a preloader). It refuses to record tests running on
-several threads at once, because their lines can't be told apart. A Ruby process a test starts
-(a CLI test, say) is recorded as part of that test.
+Pitstop recorded, or when project files loaded before coverage started. A change to one of those
+files runs everything. (`bundle exec` loads a gem's gemspec, and the version file it requires,
+first; anything more means something else loaded code early, such as another `RUBYOPT -r` or a
+preloader.) It refuses to record tests running on several threads at once, because their lines
+can't be told apart.
+
+Some tests run other code as part of themselves, and Pitstop counts that code as part of the test:
+- a Ruby process the test starts (a CLI test, say)
+- a test the test builds and runs inside itself (a test of a test helper)
+- a whole test suite the test runs in a subprocess
+
+When recording, their lines belong to the outer test. When running, Pitstop doesn't filter them.
 
 `pitstop run` checks that every selected test actually ran. A run that quietly ran fewer tests
 than it selected would look like a perfect pass, so it fails instead (exit status 3), naming the

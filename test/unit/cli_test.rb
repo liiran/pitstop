@@ -292,6 +292,85 @@ class CLITest < Minitest::Test
     end
   end
 
+  # A test of a test helper builds a test class and runs it inside itself. The inner test isn't
+  # one Minitest schedules: it's part of the outer test, when recording and when running.
+  def test_a_test_run_inside_another_test_belongs_to_it
+    nested = <<~RUBY
+      require_relative "test_helper"
+      require "cart"
+
+      class HelperTest < Minitest::Test
+        def test_a_test_built_inside_a_test_passes
+          inner = Class.new(Minitest::Test) do
+            define_method(:test_full) { assert Cart.new([1, 2, 3]).full? }
+          end
+          Minitest::Runnable.runnables.delete(inner)
+          results = inner.runnable_methods.map { inner.new(_1).run }
+          assert_equal 1, results.size
+          assert results.all?(&:passed?), "the inner test failed"
+        end
+      end
+    RUBY
+    Fixture.project(Shop::FILES.merge("test/helper_test.rb" => nested)) do |shop|
+      shop.commit("start")
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      assert_match "mapped 6 tests", out
+      assert_empty err
+      shop.edit("lib/cart.rb", "@items.size >= MAX", "MAX <= @items.size")
+      assert_equal %w[CartTest#test_full HelperTest#test_a_test_built_inside_a_test_passes], picked(shop)
+
+      code, out, err = run_tests(shop)
+      assert_equal 0, code, out + err
+      assert_equal 2, @ran
+      assert_match "Pitstop: ran 2 of 2 selected tests", out
+
+      shop.edit("lib/cart.rb", "MAX <= @items.size", "MAX < @items.size")
+      code, out, = run_tests(shop)
+      assert_equal 1, code
+      assert_match "the inner test failed", out
+      assert_match "Pitstop: ran 2 of 2 selected tests", out
+    end
+  end
+
+  # A test that runs a test suite in a separate Ruby process (a test of a test tool): that suite
+  # is part of the test, so the filter, which the process inherits, must leave it whole.
+  def test_a_suite_a_test_runs_in_a_subprocess_runs_whole
+    files = Shop::FILES.merge(
+      "test/inner/cart_check.rb" => <<~RUBY,
+        require_relative "../test_helper"
+        require "cart"
+
+        class CartCheck < Minitest::Test
+          def test_full = assert(Cart.new([1, 2, 3]).full?)
+        end
+      RUBY
+      "test/suite_test.rb" => <<~RUBY
+        require_relative "test_helper"
+        require "open3"
+
+        class SuiteTest < Minitest::Test
+          def test_runs_a_suite
+            out, status = Open3.capture2e(Gem.ruby, File.expand_path("inner/cart_check.rb", __dir__))
+            assert status.success?, out
+            assert_match "1 runs, 1 assertions, 0 failures", out
+          end
+        end
+      RUBY
+    )
+    Fixture.project(files) do |shop|
+      shop.commit("start")
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      shop.edit("lib/cart.rb", "@items.size >= MAX", "MAX <= @items.size")
+      assert_equal %w[CartTest#test_full SuiteTest#test_runs_a_suite], picked(shop)
+
+      code, out, err = run_tests(shop)
+      assert_equal 0, code, out + err
+      assert_match "Pitstop: ran 2 of 2 selected tests\n", out
+    end
+  end
+
   def test_minitest_6_end_to_end
     version = Fixture.latest("minitest", 6)
     skip "Minitest 6 not installed" unless version

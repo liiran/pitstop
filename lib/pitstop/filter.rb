@@ -23,6 +23,10 @@ module Pitstop
     ROOT = File.expand_path(ENV.fetch("PITSTOP_ROOT", Dir.pwd))
     PREFIX = "#{ROOT}/".freeze
     OUT = ENV.fetch("PITSTOP_OUT") { File.join(ROOT, ".pitstop", "ran") }
+    # Set while a test runs. A Ruby process the test starts (a CLI test running the tool, or a
+    # test suite run by a test) inherits RUBYOPT, so this file loads there too: there it's part of
+    # that test, so it neither filters nor logs anything.
+    TEST_ENV = "PITSTOP_TEST"
 
     @tests = {}
     @files = {}
@@ -66,6 +70,12 @@ module Pitstop
         # in its group's before(:context). It exists by before(:suite).
         ::RSpec.configure do |config|
           config.before(:suite) { ::RSpec.configuration.reporter.register_listener(RSpecLog, :example_finished) }
+          config.around(:each) do |example|
+            ENV[TEST_ENV] = example.id
+            example.run
+          ensure
+            ENV.delete(TEST_ENV)
+          end
         end
       end
     end
@@ -79,22 +89,37 @@ module Pitstop
       end
     end
 
-    # Each test class lists only its selected tests.
+    # Each test class lists only its selected tests. A test that builds and runs a test class
+    # inside itself (a test of a test helper) gets that class's tests unfiltered: they're part of
+    # the outer test.
     module MinitestFilter
       def runnable_methods
+        return super if Thread.current[:pitstop_in_test]
+
         name = Watch::MODULE_NAME.bind_call(self)
         super.select { |m| Pitstop::Filter.keep?("#{name}##{m}", Watch.minitest_file(self, m)) }
       end
     end
 
+    # Logs each test the framework ran; tests run inside another test are part of that test.
     module MinitestLog
       def run
-        result = super
+        return super if Thread.current[:pitstop_in_test]
+
+        id = "#{Watch::MODULE_NAME.bind_call(self.class)}##{name}"
+        result = begin
+          Thread.current[:pitstop_in_test] = true
+          ENV[Pitstop::Filter::TEST_ENV] = id
+          super
+        ensure
+          Thread.current[:pitstop_in_test] = nil
+          ENV.delete(Pitstop::Filter::TEST_ENV)
+        end
         status = if result.skipped? then "skip"
                  elsif result.passed? then "pass"
                  else "fail"
                  end
-        Pitstop::Filter.ran("#{Watch::MODULE_NAME.bind_call(self.class)}##{name}", Watch.minitest_file(self.class, name), status)
+        Pitstop::Filter.ran(id, Watch.minitest_file(self.class, name), status)
         result
       end
     end
@@ -108,5 +133,7 @@ module Pitstop
   end
 end
 
-Pitstop::Watch.frameworks(minitest: -> { Pitstop::Filter.install_minitest },
-                          rspec: ->(runner) { runner.singleton_class.prepend(Pitstop::Filter::RSpecRun) })
+unless ENV[Pitstop::Filter::TEST_ENV]
+  Pitstop::Watch.frameworks(minitest: -> { Pitstop::Filter.install_minitest },
+                            rspec: ->(runner) { runner.singleton_class.prepend(Pitstop::Filter::RSpecRun) })
+end

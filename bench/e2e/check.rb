@@ -31,6 +31,18 @@ abort "record failed" unless File.exist?(".pitstop/map.json.gz")
 map = Zlib::GzipReader.open(".pitstop/map.json.gz") { JSON.parse(_1.read) }
 baseline = map["tests"].count { _1[3] == "fail" }
 puts "already failing before any change: #{baseline}"
+# How long each test took while the map was recorded (coverage on, so slower than a plain run,
+# but the same for every test): a selection's share of that is its share of the suite's time.
+ms = map["tests"].to_h { [_1[0], _1[4].to_f] }
+total_ms = ms.values.sum
+puts "tests' own time in the map: #{(total_ms / 1000).round(1)}s"
+
+# The selected tests' share of the suite's own test time, from `pitstop list --json`.
+def time_share(json, map, ms, total_ms)
+  picked = json["run_all"] ? map["tests"].map(&:first) : json["tests"] + map["tests"].select { json["files"].include?(_1[1]) }.map(&:first)
+  sum = picked.uniq.sum { ms.fetch(_1, 0) }
+  "test time #{(sum / 1000).round(1)}s of #{(total_ms / 1000).round(1)}s (#{(100 * sum / total_ms).round(1)}%)"
+end
 
 rows = File.readlines(list, chomp: true).reject { _1.strip.empty? || _1.start_with?("#") }.map do |line|
   label, path, from, to, expected = line.split(" | ").map(&:strip)
@@ -39,6 +51,12 @@ rows = File.readlines(list, chomp: true).reject { _1.strip.empty? || _1.start_wi
   abort "#{path}: #{from.inspect} not found" unless source.include?(from)
   File.write(path, source.sub(from, to))
   begin
+    listed, = sh(*pitstop, "list", "--json")
+    share = begin
+      time_share(JSON.parse(listed[/^\{.*\}/m]), map, ms, total_ms)
+    rescue StandardError => e
+      "test time unknown (#{e.class})"
+    end
     out, code, seconds = sh(*pitstop, "run", *(["--", *record_command] unless record_command.empty?))
     picked = out[/^(?:Running|Would run) (.*)$/, 1] || out[/^Nothing to run.*$/] || "?"
     checked = out[/^Pitstop: ran .*$/] || "-"
@@ -51,7 +69,10 @@ rows = File.readlines(list, chomp: true).reject { _1.strip.empty? || _1.start_wi
               end
     problems = out.lines.grep(/^pitstop: /).map(&:strip)
     ok = outcome == expected && problems.none? { _1.include?("didn't run") || _1.include?("no tests ran") }
+    # What the framework says the run took, and (RSpec) how long loading the files took.
+    took = out[/^Finished in .*$/]&.strip || "-"
     puts "#{ok ? 'OK  ' : 'BAD '} #{label}: #{picked} | #{checked} | framework ran #{framework} | #{outcome} in #{seconds}s"
+    puts "     #{share} | #{took}"
     problems.each { puts "     #{_1}" }
     puts out unless ok
     [label, picked, checked, framework, outcome, expected, seconds, ok]

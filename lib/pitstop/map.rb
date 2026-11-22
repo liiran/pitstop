@@ -21,6 +21,10 @@ module Pitstop
 
     attr_reader :commit, :dirty, :tests, :boot, :files, :framework
 
+    # Project files loaded before coverage started (`bundle exec` loads a gem's gemspec, and
+    # whatever it requires, first). No test is linked to them, so a change to one runs everything.
+    attr_reader :unseen
+
     # Raised when the recording can't give a correct map.
     class Error < StandardError; end
 
@@ -61,8 +65,9 @@ module Pitstop
         r["cov"].each { |path, ranges| boot[path].concat(ranges) }
       end
 
+      unseen = by_kind.fetch("boot", []).flat_map { _1["unseen"] || [] }.uniq.sort
       map = new(
-        "version" => VERSION, "commit" => commit, "dirty" => dirty,
+        "version" => VERSION, "commit" => commit, "dirty" => dirty, "unseen" => unseen,
         "framework" => list.first["framework"],
         "tests" => list.map { [_1["id"], _1["file"], _1["line"], _1["status"], _1["ms"]] },
         "boot" => boot.transform_values { merge_ranges(_1) },
@@ -83,13 +88,14 @@ module Pitstop
                      "changes#{": #{named.first(5).join(', ')}#{', …' if named.size > 5}" unless named.empty?}"
       end
 
-      unseen = by_kind.fetch("boot", []).flat_map { _1["unseen"] || [] }.uniq.sort
-      unless unseen.empty?
-        one = unseen.size == 1
-        @warnings << "#{unseen.size} project #{one ? 'file' : 'files'} loaded before coverage started, so no test is linked " \
-                     "to #{one ? 'it' : 'them'}: #{unseen.first(5).join(', ')}#{', …' if unseen.size > 5}. " \
-                     "Is something loading code before Pitstop (another RUBYOPT -r, a preloader such as Spring)?"
-      end
+      return if unseen.empty?
+
+      one = unseen.size == 1
+      @warnings << "#{unseen.size} project #{one ? 'file' : 'files'} loaded before coverage started, so no test is linked " \
+                   "to #{one ? 'it' : 'them'} and changing #{one ? 'it' : 'one'} runs every test: " \
+                   "#{unseen.first(5).join(', ')}#{', …' if unseen.size > 5}. `bundle exec` loads a gem's gemspec " \
+                   "(and what it requires) first; anything more means something else loads code before Pitstop " \
+                   "(another RUBYOPT -r, a preloader such as Spring)."
     end
 
     def self.merge_ranges(ranges)
@@ -117,6 +123,7 @@ module Pitstop
       @tests = data["tests"].each_with_index.map { |(id, file, line, status, ms), i| Test.new(i, id, file, line, status, ms) }
       @boot = data["boot"]
       @files = data["files"]
+      @unseen = data["unseen"] || []
       @warnings = []
     end
 
