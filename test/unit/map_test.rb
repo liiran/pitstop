@@ -5,12 +5,15 @@ require "pitstop/map"
 
 # Merging what the test processes wrote into one map, from hand-written records.
 class MapTest < Minitest::Test
+  COMMIT = "c0ffee".ljust(40, "0")
+  RAN = { "lib/cart.rb" => [[1, 1]] }.freeze # some line of the project, for tests about something else
+
   def build(*shards, dirty: [])
     Dir.mktmpdir do |dir|
       shards.each_with_index do |records, i|
         File.write(File.join(dir, "#{100 + i}.jsonl"), records.map { JSON.generate(_1) + "\n" }.join)
       end
-      Pitstop::Map.build(dir, commit: "c0ffee", dirty:)
+      Pitstop::Map.build(dir, commit: COMMIT, dirty:)
     end
   end
 
@@ -74,16 +77,24 @@ class MapTest < Minitest::Test
   end
 
   def test_warns_when_the_framework_ran_more_tests_than_were_recorded
-    assert_match "2 of 3 tests ran without being recorded", build([rec("A#a"), summary(3)]).warnings.join
+    one = rec("A#a", cov: RAN)
+    assert_match "2 of 3 tests ran without being recorded", build([one, summary(3)]).warnings.join
     named = summary(2).merge("framework" => "rspec", "unrecorded" => ["./spec/a_spec.rb[1:2]"])
-    assert_match "only run when their own test file changes: ./spec/a_spec.rb[1:2]", build([rec("A#a"), named]).warnings.join
-    assert_match "never reported its total", build([rec("A#a")]).warnings.join
-    assert_empty build([rec("A#a"), rec("A#b"), summary(1)], [summary(1)]).warnings, "totals add up across processes"
+    assert_match "only run when their own test file changes: ./spec/a_spec.rb[1:2]", build([one, named]).warnings.join
+    assert_match "never reported its total", build([one]).warnings.join
+    assert_empty build([one, rec("A#b"), summary(1)], [summary(1)]).warnings, "totals add up across processes"
   end
 
   def test_warns_about_project_files_coverage_never_saw
-    map = build([{ "kind" => "boot", "cov" => {}, "unseen" => ["lib/early.rb"] }, rec("A#a"), summary(1)])
+    map = build([{ "kind" => "boot", "cov" => {}, "unseen" => ["lib/early.rb"] }, rec("A#a", cov: RAN), summary(1)])
     assert_match "1 project file loaded before coverage started, so no test is linked to it and changing it runs every test: lib/early.rb", map.warnings.join
+  end
+
+  # Tests ran, but not one line of the project was seen (recorded from the wrong folder, say):
+  # such a map would pick nothing for every change and look safe.
+  def test_a_recording_that_saw_no_project_code_is_an_error
+    error = assert_raises(Pitstop::Map::Error) { build([rec("A#a"), rec("A#b"), summary(2)]) }
+    assert_match "2 tests were recorded, but none of them ran a file in this folder", error.message
   end
 
   def test_a_recording_error_or_no_tests_at_all_is_an_error
@@ -97,7 +108,7 @@ class MapTest < Minitest::Test
       path = File.join(dir, ".pitstop", "map.json.gz")
       build([rec("A#a", cov: { "lib/cart.rb" => [[5, 5]] }), summary(1)], dirty: ["lib/cart.rb"]).save(path)
       map = Pitstop::Map.load(path)
-      assert_equal "c0ffee", map.commit
+      assert_equal COMMIT, map.commit
       assert_equal ["lib/cart.rb"], map.dirty
       assert_equal "minitest", map.framework
       assert_equal %w[A#a], ids(map, "lib/cart.rb", 5..5)

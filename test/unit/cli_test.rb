@@ -162,7 +162,7 @@ class CLITest < Minitest::Test
       shop.write(".pitstop.yml", "ignore:\n  - lib/rates.json\n")
       shop.commit("config")
       code, out, = shop.pitstop("list", "--explain")
-      assert_match ".pitstop.yml  app-wide file  → all tests", out, "changing the rules themselves runs everything"
+      assert_match ".pitstop.yml  Pitstop's settings  → all tests", out, "changing the rules themselves runs everything"
 
       shop.pitstop("record")
       shop.write("lib/rates.json", "{}")

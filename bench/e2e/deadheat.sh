@@ -3,6 +3,8 @@
 # in Dead Heat's own Ruby 3.4 container:
 #   docker run --rm -v <deadheat>:/deadheat -v <pitstop>:/pitstop -v deadheat_bundle:/usr/local/bundle deadheat-dev sh /pitstop/bench/e2e/deadheat.sh
 set -e
+# Only inside the throwaway dev container: this deletes /work and changes git's global settings.
+[ -f /.dockerenv ] || [ -f /run/.containerenv ] || { echo "$0: run this inside the dev container (see compose.yaml), not on your own machine" >&2; exit 1; }
 rm -rf /work && mkdir -p /work && cp -r /deadheat /work/deadheat && cd /work/deadheat
 rm -rf .pitstop
 git config --global --add safe.directory '*'

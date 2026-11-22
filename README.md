@@ -80,7 +80,68 @@ ignore: ["Gemfile.saas*"]      # changes here never need tests
 global: ["app/lib/money.rb"]   # changes here run everything
 ```
 
-The lists are `ignore`, `global`, `browser`, `tests`, `test_support` and `ruby`.
+The lists are `ignore`, `global`, `browser`, `tests`, `test_support` and `ruby`. A change to
+`.pitstop.yml` itself always runs everything, whatever its `ignore` list says.
+
+`command` is a list of words (`bin/rails test` is two), started directly: nothing in it is read
+by a shell, so `&&`, `>` and `$VAR` mean nothing there. For those, point it at a script.
+
+## A project inside a bigger repository
+
+Run Pitstop from the project's own folder (the one with its `Gemfile` and tests), say `backend/`
+in a repository that also holds `frontend/`. Files elsewhere in the repository show up with `../`:
+
+```
+$ cd backend && pitstop list
+  ../frontend/src/app.js   browser-only file                                          → 0 tests
+  ../common/lib/money.rb   outside this project's folder, where the map can't follow it  → all tests
+```
+
+Docs and browser files elsewhere pick nothing. Anything else there runs everything, because the
+map only follows files inside the project's folder. If a folder beside yours can't affect your
+tests, say so:
+
+```yaml
+ignore: ["../mobile/**"]
+```
+
+## SimpleCov
+
+Ruby has one coverage counter, and Pitstop and SimpleCov both read it.
+
+- **`pitstop record`** switches SimpleCov off for that run and says so. (SimpleCov would report
+  nothing covered, fail a `minimum_coverage` setting and overwrite your last real report.)
+- **`pitstop run`** leaves SimpleCov alone, but a run of 40 tests out of 2,000 covers far less
+  code than the whole suite. If you enforce a minimum, skip it for partial runs. Pitstop sets
+  `PITSTOP` to `record` or `run` in the test process:
+
+```ruby
+SimpleCov.start do
+  minimum_coverage 90 unless ENV["PITSTOP"] == "run"
+end
+```
+
+## Safety
+
+What Pitstop does on your machine, so you can decide where to use it:
+
+- **It runs your test command, and nothing else.** No network access, no telemetry, nothing sent
+  anywhere.
+- **It writes only inside `.pitstop/`** in your project: the map, and working files it removes
+  when a run ends. `.pitstop/` keeps itself out of git.
+- **The map holds** test names, file paths inside the project, line numbers and a commit id.
+  It holds no source code, no environment variables and no paths from outside the project.
+- **The map and `.pitstop.yml` are read as plain data** and checked before use. A map that isn't
+  one Pitstop wrote is refused.
+- **`pitstop list` runs no project code.** It reads the map and asks git what changed.
+- **The map decides which tests get skipped**, so use one made by a build you trust (your main
+  branch's CI), not one that arrives with the change being tested.
+
+`pitstop record` and `pitstop run` load a small file into the test process through `RUBYOPT`, and
+every Ruby process your tests start inherits it. In a process run by an older Ruby, or by JRuby,
+it does nothing.
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Developing
 
@@ -92,7 +153,7 @@ The tests build small throwaway projects in real git repos and run the real `pit
 For the framework matrix, install the extra gems outside your system gems:
 
 ```sh
-gem install --install-dir tmp/gems minitest:6.1.0 minitest:5.27.0 rspec activesupport
+gem install --install-dir tmp/gems minitest:6.1.0 minitest:5.27.0 rspec activesupport simplecov
 ```
 
 Anything that forks (Rails' parallel workers, a test that forks) is tested on Linux; on Windows

@@ -335,6 +335,7 @@ class RecordTest < Minitest::Test
   def test_rspec_examples_failed_by_their_group_setup_are_in_the_map_as_failed
     skip "rspec not installed" unless Fixture.rspec?
     Fixture.project(RSPEC.merge("spec/setup_spec.rb" => <<~RUBY)) do |p|
+      require_relative "../lib/stock"
       RSpec.describe "broken setup" do
         before(:all) { raise "no database" }
         it("one") { expect(1).to eq 1 }

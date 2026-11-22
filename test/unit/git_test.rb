@@ -53,6 +53,48 @@ class GitTest < Minitest::Test
     end
   end
 
+  # A project in a folder of the repository sees its own files by their path inside the project,
+  # and the rest of the repository through "../".
+  def test_a_project_in_a_folder_of_the_repository
+    files = { "apps/shop/lib/cart.rb" => "one\n", "apps/web/app.js" => "x\n", "README.md" => "x\n", "apps/shop/old.rb" => "x\n" * 20 }
+    Fixture.project(files) do |p|
+      p.commit
+      git = Pitstop::Git.new(File.join(p.dir, "apps/shop"))
+      base = git.head
+      p.write("apps/shop/lib/cart.rb", "two\n")
+      p.write("apps/web/app.js", "y\n")
+      p.write("README.md", "y\n")
+      p.move("apps/shop/old.rb", "libs/moved.rb")
+      p.write("apps/shop/new file.rb", "n\n")
+      p.write("apps/web/untracked.js", "n\n")
+
+      found = git.changes_since(base).map { [_1.status, _1.path, _1.old_path].compact }.sort
+      assert_equal [["A", "../web/untracked.js"], ["A", "new file.rb"], ["M", "../../README.md"], ["M", "../web/app.js"],
+                    ["M", "lib/cart.rb"], ["R", "../../libs/moved.rb", "old.rb"]], found
+      assert_equal %w[../../README.md ../../libs/moved.rb ../web/app.js ../web/untracked.js lib/cart.rb new\ file.rb old.rb],
+                   git.dirty_paths.sort
+      assert_equal "one\n", git.show(base, "lib/cart.rb")
+      assert_equal "x\n", git.show(base, "../web/app.js")
+      assert_nil git.show(base, "../web/missing.js")
+    end
+  end
+
+  # The commit to compare with comes from the map file. Anything but a full commit id is refused
+  # before git sees it: git would read a value like "--output=file" as an option.
+  def test_only_a_full_commit_id_reaches_git
+    Fixture.project("a.rb" => "a\n") do |p|
+      p.commit
+      git = Pitstop::Git.new(p.dir)
+      marker = File.join(p.dir, "made-by-git.txt")
+      ["--output=#{marker}", "-h", "HEAD", "main", "abc123", "", nil, "#{git.head} --output=#{marker}"].each do |value|
+        refute git.commit?(value), value.inspect
+        assert_raises(Pitstop::Git::Error) { git.changes_since(value) }
+        assert_raises(Pitstop::Git::Error) { git.show(value, "a.rb") }
+      end
+      refute File.exist?(marker)
+    end
+  end
+
   def test_outside_a_repo_is_a_clear_error
     Dir.mktmpdir do |dir|
       error = assert_raises(Pitstop::Git::Error) { Pitstop::Git.new(dir).head }

@@ -4,6 +4,7 @@ require "fileutils"
 require "shellwords"
 require "set"
 require_relative "version"
+require_relative "watch"
 require_relative "git"
 require_relative "map"
 require_relative "rules"
@@ -38,7 +39,8 @@ module Pitstop
       @argv = argv.dup
       @out = out
       @err = err
-      @root = File.expand_path(root)
+      # The real folder, as Ruby reports the files it loads from it.
+      @root = File.realpath(root)
     end
 
     def run
@@ -53,18 +55,31 @@ module Pitstop
         64
       end
     rescue OptionParser::ParseError, ArgumentError => e
-      @err.puts("pitstop: #{e.message}")
+      warn(e.message)
       64
     rescue Git::Error, Map::Error => e
-      @err.puts("pitstop: #{e.message}")
+      warn(e.message)
       1
+    rescue Interrupt
+      130 # stopped with Ctrl-C, like the test command it was running
     end
 
     private
 
     attr_reader :root
 
-    def map_path = File.join(root, ".pitstop", "map.json.gz")
+    def pitstop_dir = File.join(root, ".pitstop")
+
+    def map_path = File.join(pitstop_dir, "map.json.gz")
+
+    # Everything Pitstop writes goes in .pitstop/, which keeps itself out of git: a map is made
+    # for one commit on one machine's checkout, and is not meant to be committed by accident.
+    def make_pitstop_dir
+      return if Dir.exist?(pitstop_dir)
+
+      Dir.mkdir(pitstop_dir)
+      File.write(File.join(pitstop_dir, ".gitignore"), "*\n")
+    end
 
     # --- record ----------------------------------------------------------------------------------
 
@@ -72,24 +87,23 @@ module Pitstop
       command = command_from(@argv)
       git = Git.new(root)
       commit = git.head
-      run_dir = File.join(root, ".pitstop", "runs", "#{Time.now.strftime('%Y%m%d-%H%M%S')}-#{Process.pid}")
+      make_pitstop_dir
+      run_dir = File.join(pitstop_dir, "runs", "#{Time.now.strftime('%Y%m%d-%H%M%S')}-#{Process.pid}")
       FileUtils.mkdir_p(run_dir)
-      env = hook_env("pitstop/record").merge("PITSTOP_OUT" => run_dir, "PITSTOP_TEST" => nil)
-      @out.puts("Pitstop: recording `#{shown(command)}` at #{commit[0, 7]}")
-      @out.flush
+      env = hook_env("record").merge("PITSTOP_OUT" => run_dir)
+      say("Pitstop: recording `#{shown(command)}` at #{commit[0, 7]}")
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      ok = system(env, *command, chdir: root)
-      raise ArgumentError, "couldn't start `#{shown(command)}`" if ok.nil?
-
+      ok = start(env, command)
       seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       map = Map.build(run_dir, commit:, dirty: git.dirty_paths.reject { _1.start_with?(".pitstop/") || _1 == ".pitstop" })
       map.save(map_path)
-      FileUtils.rm_rf(run_dir) unless ENV["PITSTOP_KEEP_RUNS"] == "1"
-      map.warnings.each { @err.puts("pitstop: warning: #{_1}") }
+      map.warnings.each { warn("warning: #{_1}") }
       failed = map.tests.count(&:failed?)
-      @out.puts("Pitstop: mapped #{map.tests.size} tests over #{map.files.size} files in #{seconds.round}s" \
-                "#{" (#{failed} didn't pass; they'll always run)" if failed.positive?}. Saved #{relative(map_path)}")
+      say("Pitstop: mapped #{map.tests.size} tests over #{map.files.size} files in #{seconds.round}s" \
+          "#{" (#{failed} didn't pass; they'll always run)" if failed.positive?}. Saved #{relative(map_path)}")
       ok ? 0 : 1
+    ensure
+      FileUtils.rm_rf(run_dir) if run_dir && ENV["PITSTOP_KEEP_RUNS"] != "1"
     end
 
     # --- list ------------------------------------------------------------------------------------
@@ -107,11 +121,11 @@ module Pitstop
       else
         print_reasons(map, selection, explain:)
         if selection.all?
-          @out.puts("Would run all #{map.tests.size} tests: #{selection.run_all}")
+          say("Would run all #{map.tests.size} tests: #{selection.run_all}")
         else
           plan = plan_for(map, selection)
-          @out.puts("Would run #{describe(plan, map)}")
-          plan.tests.each { |t| @out.puts("    #{t.id}  #{t.file}:#{t.line}") } if explain
+          say("Would run #{describe(plan, map)}")
+          plan.tests.each { |t| say("    #{t.id}  #{t.file}:#{t.line}") } if explain
         end
       end
       0
@@ -129,35 +143,65 @@ module Pitstop
       print_reasons(map, selection, explain:)
 
       if selection.all?
-        @out.puts("Running all #{map.tests.size} tests: #{selection.run_all}")
-        @out.flush
-        return system({ "PITSTOP_TEST" => nil }, *command, chdir: root) ? 0 : 1
+        say("Running all #{map.tests.size} tests: #{selection.run_all}")
+        return start({ "PITSTOP" => "run", "PITSTOP_TEST" => nil }, command) ? 0 : 1
       end
 
       plan = plan_for(map, selection)
       if plan.empty?
-        @out.puts("Nothing to run: none of your changes can affect a test.")
+        say("Nothing to run: none of your changes can affect a test.")
         return 0
       end
 
-      ran_dir = File.join(root, ".pitstop", "ran-#{Process.pid}")
+      make_pitstop_dir
+      ran_dir = File.join(pitstop_dir, "ran-#{Process.pid}")
       FileUtils.rm_rf(ran_dir)
       FileUtils.mkdir_p(ran_dir)
       selection_file = File.join(ran_dir, "selection.txt")
-      File.write(selection_file, plan.files.map { "file #{_1}\n" }.join + plan.tests.map { "test #{_1.id}\n" }.join)
-      narrowed, extra_env = narrow(command, map.framework, plan)
-      env = hook_env("pitstop/filter").merge(extra_env).merge("PITSTOP_SELECTION" => selection_file,
-                                                             "PITSTOP_OUT" => ran_dir, "PITSTOP_TEST" => nil)
-      @out.puts("Running #{describe(plan, map)}")
-      @out.flush
-      ok = system(env, *narrowed, chdir: root)
-      raise ArgumentError, "couldn't start `#{shown(narrowed)}`" if ok.nil?
-
+      File.binwrite(selection_file, plan.files.map { "file #{Watch.escape(_1)}\n" }.join +
+                                    plan.tests.map { "test #{Watch.escape(_1.id)}\n" }.join)
+      narrowed = narrow(command, map.framework, plan)
+      env = hook_env("filter").merge("PITSTOP_SELECTION" => selection_file, "PITSTOP_OUT" => ran_dir)
+      say("Running #{describe(plan, map)}")
+      ok = start(env, narrowed)
       checked = check_ran(plan, read_ran(ran_dir))
-      FileUtils.rm_rf(ran_dir)
       return 1 unless ok
 
       checked ? 0 : 3
+    ensure
+      FileUtils.rm_rf(ran_dir) if ran_dir
+    end
+
+    # Runs the test command and waits for it. The command is a list of words and is started
+    # directly, never through a shell: `["rspec", "a;b"]` passes "a;b" to rspec as it is.
+    def start(env, command)
+      @out.flush
+      pid = begin
+        Process.spawn(env, [command.first, command.first], *command.drop(1), chdir: root)
+      rescue SystemCallError
+        hint = command.size == 1 && command.first.include?(" ") ? " (give the command as separate words: -- #{command.first})" : ""
+        raise ArgumentError, "couldn't start `#{shown(command)}`#{hint}"
+      end
+      _, status = Process.wait2(pid)
+      pid = nil
+      status.success?
+    ensure
+      stop(pid) if pid
+    end
+
+    # Pitstop is being stopped (Ctrl-C, or a CI job cancelled) while the test command still runs:
+    # stop the command too, so no test run is left going with nobody waiting for it.
+    def stop(pid)
+      Process.kill(Gem.win_platform? ? "KILL" : "TERM", pid)
+      50.times do
+        return if Process.wait(pid, Process::WNOHANG)
+
+        sleep 0.1
+      end
+      Process.kill("KILL", pid)
+      Process.wait(pid)
+    rescue SystemCallError
+      nil # already gone
     end
 
     # The tests to run, leaving out tests whose file is gone (a failed test in a deleted file).
@@ -183,14 +227,20 @@ module Pitstop
     # TEST=a,b as a list and older Rakes read it as one glob, so no value works for both.)
     def narrow(command, framework, plan)
       names = command.map { File.basename(_1, ".*") }
-      if framework == "rspec" && names.include?("rspec")
-        [command + rspec_args(plan), {}]
-      elsif framework == "minitest" && names.include?("rails") && command.last == "test"
-        [command + plan.test_files, {}]
-      else
-        [command, {}]
-      end
+      extra = if framework == "rspec" && names.include?("rspec") then rspec_args(plan)
+              elsif framework == "minitest" && names.include?("rails") && command.last == "test" then plan.test_files
+              end
+      return command unless extra && extra.all? { passable?(_1) }
+
+      # A file whose name starts with a dash would be read as an option.
+      command + extra.map { _1.start_with?("-") ? "./#{_1}" : _1 }
     end
+
+    # Can this file name be handed to the test command as it is? On Windows, commands such as
+    # `bundle` and `rspec` are batch files, and cmd.exe rewrites some characters in their arguments
+    # (%NAME% becomes a variable's value, ^ disappears). With a name like that the command isn't
+    # narrowed: for Minitest the filter still runs only the selected tests, and RSpec runs them all.
+    def passable?(arg) = !Gem.win_platform? || arg.match?(%r{\A[\p{Alnum} _\-./\\:,@+=~#\[\]()']+\z})
 
     # `spec/cart_spec.rb[1:2,1:4]` runs examples 1:2 and 1:4 of that file; a bare path runs it all.
     def rspec_args(plan)
@@ -207,8 +257,8 @@ module Pitstop
     # {test id => [file, status]} for every test the filter saw run.
     def read_ran(dir)
       Dir[File.join(dir, "*.tsv")].each_with_object({}) do |path, ran|
-        File.foreach(path, chomp: true) do |line|
-          id, file, status = line.split("\t")
+        File.foreach(path, chomp: true, mode: "rb", encoding: "UTF-8") do |line|
+          id, file, status = line.split("\t").map { Watch.unescape(_1) }
           ran[id] = [file, status]
         end
       end
@@ -226,16 +276,16 @@ module Pitstop
       summary = "Pitstop: ran #{expected.size - missing.size} of #{expected.size} selected tests"
       summary += ", plus #{from_files} from whole test files" unless plan.files.empty?
       summary += " (and #{extra} not selected)" if extra.positive?
-      @out.puts(summary)
-      silent.each { @err.puts("pitstop: warning: no tests ran from #{_1}") }
+      say(summary)
+      silent.each { warn("warning: no tests ran from #{_1}") }
       if ran.empty?
-        @err.puts("pitstop: no tests ran at all, so nothing was checked. Is the test command right, and does it load Pitstop's RUBYOPT?")
+        warn("no tests ran at all, so nothing was checked. Is the test command right, and does it load Pitstop's RUBYOPT?")
         return false
       end
       return true if missing.empty?
 
-      @err.puts("pitstop: #{missing.size} selected #{missing.size == 1 ? 'test' : 'tests'} didn't run, so this run doesn't " \
-                "cover your change: #{missing.first(10).join(', ')}#{', …' if missing.size > 10}")
+      warn("#{missing.size} selected #{missing.size == 1 ? 'test' : 'tests'} didn't run, so this run doesn't " \
+           "cover your change: #{missing.first(10).join(', ')}#{', …' if missing.size > 10}")
       false
     end
 
@@ -270,15 +320,14 @@ module Pitstop
       @config ||= begin
         path = File.join(root, ".pitstop.yml")
         if File.exist?(path)
-          require "yaml"
-          data = YAML.safe_load_file(path) || {}
+          data = read_yaml(path) || {}
           raise ArgumentError, ".pitstop.yml should be a list of settings like `ignore: [\"docs/**\"]`" unless data.is_a?(Hash)
 
           unknown = data.keys - CONFIG_KEYS
           raise ArgumentError, ".pitstop.yml: unknown setting #{unknown.first.inspect} (known: #{CONFIG_KEYS.join(', ')})" unless unknown.empty?
 
           data.each do |key, value|
-            next if key == "command" ? value.is_a?(String) || string_list?(value) : string_list?(value)
+            next if key == "command" ? (value.is_a?(String) && !value.strip.empty?) || words?(value) : string_list?(value)
 
             raise ArgumentError, ".pitstop.yml: #{key} should be a list of #{key == 'command' ? 'words' : 'file patterns'}"
           end
@@ -289,7 +338,18 @@ module Pitstop
       end
     end
 
+    # Plain settings only: strings, lists and so on. YAML that names a Ruby class to build, or
+    # that repeats itself with aliases, is refused.
+    def read_yaml(path)
+      require "yaml"
+      YAML.safe_load_file(path)
+    rescue Psych::Exception => e
+      raise ArgumentError, ".pitstop.yml can't be read: #{e.message.sub(/\A\(.*?\): /, '').lines.first.to_s.strip}"
+    end
+
     def string_list?(value) = value.is_a?(Array) && value.all?(String)
+
+    def words?(value) = string_list?(value) && !value.empty? && value.none?(&:empty?)
 
     def command_from(args)
       args = args.drop(1) if args.first == "--"
@@ -312,21 +372,39 @@ module Pitstop
       end
     end
 
-    # Loads one of Pitstop's hook files into the test process before anything else.
-    def hook_env(feature)
+    # Loads one of Pitstop's hook files ("record" or "filter") into the test process before
+    # anything else. Its folder goes in RUBYLIB, not in RUBYOPT as -I: RUBYOPT is split on spaces,
+    # and Pitstop may be installed under a folder with a space in its name. PITSTOP tells the
+    # project's own test setup which of the two is running.
+    def hook_env(mode)
       lib = File.expand_path("..", __dir__)
-      { "RUBYOPT" => "-I#{lib} -r#{feature} #{ENV['RUBYOPT']}".strip, "PITSTOP_ROOT" => root }
+      {
+        "RUBYLIB" => [lib, ENV["RUBYLIB"]].compact.reject(&:empty?).join(File::PATH_SEPARATOR),
+        "RUBYOPT" => "-rpitstop/#{mode} #{ENV['RUBYOPT']}".strip,
+        "PITSTOP" => mode == "filter" ? "run" : mode, "PITSTOP_ROOT" => root, "PITSTOP_TEST" => nil
+      }
     end
 
     def print_reasons(map, selection, explain:)
-      @out.puts("Pitstop: map from #{map.commit[0, 7]}, #{map.tests.size} tests")
+      say("Pitstop: map from #{map.commit[0, 7]}, #{map.tests.size} tests")
       reasons = explain ? selection.reasons : selection.reasons.reject { _1.tests.zero? && !_1.all }
       width = reasons.map { _1.path.to_s.size }.max.to_i
       reasons.each do |r|
         count = r.all ? "all tests" : "#{r.tests} #{r.tests == 1 ? 'test' : 'tests'}"
-        @out.puts("  #{(r.path || '(map)').ljust(width)}  #{r.what}  → #{count}")
+        say("  #{(r.path || '(map)').ljust(width)}  #{r.what}  → #{count}")
       end
     end
+
+    # One line to the terminal. File and test names come from the repository, and a name can hold
+    # characters that drive a terminal (colours, cursor moves, text-direction marks), so those are
+    # shown as codes like \e instead of being sent.
+    def say(line) = @out.puts(printable(line))
+
+    def warn(line) = @err.puts(printable("pitstop: #{line}"))
+
+    UNPRINTABLE = /[\p{Cc}؜‎‏‪-‮⁦-⁩]/
+
+    def printable(text) = text.to_s.scrub("?").gsub(UNPRINTABLE) { _1.dump[1..-2] }
 
     def as_json(map, selection)
       {

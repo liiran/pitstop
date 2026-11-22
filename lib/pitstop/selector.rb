@@ -48,6 +48,8 @@ module Pitstop
 
     def consider_path(path, status)
       verdict = @rules.classify(path)
+      return outside(path, verdict) if path.start_with?("../")
+
       case verdict.kind
       when :ignore then note(path, verdict.reason, [])
       when :global then run_all(path, verdict.reason)
@@ -59,10 +61,23 @@ module Pitstop
       end
     end
 
+    # A file elsewhere in the repository, when the project is one folder of it. The map only
+    # follows files inside the project's folder, so unless the file is one that can't affect tests
+    # (docs, browser-only files, an `ignore` pattern such as "../frontend/**"), run everything.
+    def outside(path, verdict, suffix = "")
+      return note(path, verdict.reason, []) if %i[ignore browser].include?(verdict.kind)
+
+      run_all(path, "outside this project's folder, where the map can't follow it#{suffix}")
+    end
+
     # A file that had uncommitted edits when the map was made: the map saw those edits, not the
     # committed version, so compare nothing and take every test that ran it.
     def dirty_file(path)
       verdict = @rules.classify(path)
+      if path.start_with?("../")
+        return %i[ignore browser].include?(verdict.kind) ? nil : outside(path, verdict, " (uncommitted when the map was made)")
+      end
+
       case verdict.kind
       when :ignore, :browser then nil
       when :global then run_all(path, "#{verdict.reason}, uncommitted when the map was made")

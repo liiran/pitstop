@@ -36,7 +36,7 @@ module Fixture
   # these tests (when Pitstop records itself), cleared so fixtures start clean.
   # MT_NO_PLUGINS: with two Minitests installed side by side and no Bundler, Minitest's plugin
   # search would load the other version's files.
-  CLEAN_ENV = %w[RUBYOPT PITSTOP_TEST PITSTOP_OUT PITSTOP_ROOT PITSTOP_GRANULARITY PITSTOP_SELECTION
+  CLEAN_ENV = %w[RUBYOPT RUBYLIB PITSTOP PITSTOP_TEST PITSTOP_OUT PITSTOP_ROOT PITSTOP_GRANULARITY PITSTOP_SELECTION
                  PITSTOP_KEEP_RUNS TEST].to_h { [_1, nil] }.merge(GEM_ENV, "MT_NO_PLUGINS" => "1").freeze
 
   # A binstub, as `bundle binstubs rspec-core` makes, so fixtures can run RSpec without Bundler.
@@ -88,15 +88,16 @@ module Fixture
       out
     end
 
-    # Runs `pitstop <argv>` here. Returns [exit status, stdout, stderr].
-    def pitstop(*argv, env: {})
-      out, err, status = Open3.capture3(CLEAN_ENV.merge(env), Gem.ruby, EXE, *argv, chdir: dir)
+    # Runs `pitstop <argv>` here (or in the folder `at` inside the project, or with another copy
+    # of Pitstop, `exe`). Returns [exit status, stdout, stderr].
+    def pitstop(*argv, env: {}, at: ".", exe: EXE)
+      out, err, status = Open3.capture3(CLEAN_ENV.merge(env), Gem.ruby, exe, *argv, chdir: File.join(dir, at))
       [status.exitstatus, out, err]
     end
 
     # `pitstop list --json`, parsed.
-    def selection(env: {})
-      code, out, err = pitstop("list", "--json", env:)
+    def selection(env: {}, at: ".")
+      code, out, err = pitstop("list", "--json", env:, at:)
       raise "pitstop list failed (#{code}): #{err}" unless code.zero?
 
       JSON.parse(out)

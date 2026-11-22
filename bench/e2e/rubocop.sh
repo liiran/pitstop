@@ -2,6 +2,8 @@
 # End-to-end check on RuboCop (pure Ruby, RSpec, ~36k examples), in the Ruby 4 container:
 #   docker run --rm -v <pitstop>:/pitstop -v pitstop_bundle4:/usr/local/bundle pitstop-dev4 sh /pitstop/bench/e2e/rubocop.sh
 set -e
+# Only inside the throwaway dev container: this deletes /work and changes git's global settings.
+[ -f /.dockerenv ] || [ -f /run/.containerenv ] || { echo "$0: run this inside the dev container (see compose.yaml), not on your own machine" >&2; exit 1; }
 rm -rf /work && mkdir -p /work && cp -r /pitstop/bench/apps/rubocop /work/rubocop && cd /work/rubocop
 rm -rf .pitstop
 git config --global --add safe.directory '*'

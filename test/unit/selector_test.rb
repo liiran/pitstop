@@ -148,6 +148,27 @@ class SelectorTest < Minitest::Test
     assert_empty ids(deleted_test)
   end
 
+  # The project is one folder of a repository: a file elsewhere in it shows up as "../...".
+  # The map can't follow those, so only files that can't affect tests are let through.
+  def test_files_elsewhere_in_the_repository
+    harmless = select([["M", "../frontend/src/app.js"], ["A", "../docs/guide.md"], ["M", "../README.md"]])
+    refute harmless.all?
+    assert_empty ids(harmless)
+
+    ["../common/lib/money.rb", "../common/data/rates.json", "../Gemfile.lock", "../other/test/x_test.rb"].each do |path|
+      %w[M A D].each do |status|
+        s = select([[status, path]])
+        assert s.all?, "#{status} #{path}"
+        assert_equal "#{path}: outside this project's folder, where the map can't follow it", s.run_all
+      end
+    end
+  end
+
+  def test_files_elsewhere_that_were_uncommitted_when_the_map_was_made
+    assert select([], dirty: ["../common/lib/money.rb"]).all?
+    refute select([], dirty: ["../frontend/app.js", "../notes.md"]).all?
+  end
+
   def test_a_renamed_test_file_runs_whole_under_its_new_name
     s = select([["R", "test/basket_test.rb", "test/cart_test.rb"]])
     assert_equal ["test/basket_test.rb"], s.files.to_a

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Spike B on Fizzy: plain run vs recorded run (parallel workers on), on the container's filesystem.
 set -e
+# Only inside the throwaway dev container: this deletes /work and changes git's global settings.
+[ -f /.dockerenv ] || [ -f /run/.containerenv ] || { echo "$0: run this inside the dev container (see compose.yaml), not on your own machine" >&2; exit 1; }
 rm -rf /work && mkdir -p /work && cp -r /pitstop/bench/apps/fizzy /work/fizzy && cd /work/fizzy
 bundle install --quiet 2>&1 | tail -3
 export RAILS_ENV=test CI_PROGRESS_BAR=false

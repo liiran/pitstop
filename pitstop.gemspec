@@ -8,10 +8,12 @@ Gem::Specification.new do |spec|
   spec.authors = ["Liran"]
   spec.homepage = "https://github.com/liiran/pitstop"
   spec.required_ruby_version = ">= 3.2"
-  spec.files = Dir["lib/**/*", "exe/*", "README.md"]
+  spec.files = Dir["lib/**/*.rb", "exe/pitstop", "README.md", "SECURITY.md"]
   spec.bindir = "exe"
   spec.executables = ["pitstop"]
   spec.metadata["rubygems_mfa_required"] = "true"
+  spec.metadata["source_code_uri"] = spec.homepage
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
 
   spec.add_dependency "prism", ">= 1.2"
 end

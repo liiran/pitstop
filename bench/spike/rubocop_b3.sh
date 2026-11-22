@@ -1,6 +1,8 @@
 #!/bin/sh
 # Spike B, part 2: one slice of RuboCop's suite, plain vs per-test vs per-file recording.
 set -e
+# Only inside the throwaway dev container: this deletes /work and changes git's global settings.
+[ -f /.dockerenv ] || [ -f /run/.containerenv ] || { echo "$0: run this inside the dev container (see compose.yaml), not on your own machine" >&2; exit 1; }
 rm -rf /work && mkdir -p /work && cp -r /pitstop/bench/apps/rubocop /work/rubocop && cd /work/rubocop
 bundle install --quiet 2>&1 | tail -2
 SLICE=spec/rubocop/cop/style

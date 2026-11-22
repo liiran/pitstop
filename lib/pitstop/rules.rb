@@ -44,6 +44,9 @@ module Pitstop
     end
 
     def classify(path)
+      # Before anything else: these settings decide what's ignored, so no `ignore` pattern (not
+      # even "**/*") can hide a change to them.
+      return Verdict.new(:global, "Pitstop's settings") if path == ".pitstop.yml"
       return Verdict.new(:ignore, "docs or project metadata") if match?("ignore", path)
       return Verdict.new(:global, "app-wide file") if match?("global", path)
       return Verdict.new(:test, "test file") if match?("tests", path)

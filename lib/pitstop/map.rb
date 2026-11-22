@@ -38,7 +38,9 @@ module Pitstop
       end
       error = records.find { _1["kind"] == "error" }
       raise Error, error["message"] if error
-      raise Error, "no tests were recorded (did the test command run any?)" if records.none? { _1["kind"] == "test" }
+      if records.none? { _1["kind"] == "test" }
+        raise Error, "no tests were recorded. Did the test command run any, on Ruby 3.2 or newer (not JRuby or TruffleRuby)?"
+      end
 
       by_kind = records.group_by { _1["kind"] }
       tests = {}
@@ -63,6 +65,12 @@ module Pitstop
       boot = Hash.new { |h, k| h[k] = [] }
       (by_kind.fetch("boot", []) + by_kind.fetch("worker_boot", [])).each do |r|
         r["cov"].each { |path, ranges| boot[path].concat(ranges) }
+      end
+
+      # A map that links no test to any file would pick nothing for every change, and look safe.
+      if by_file.empty? && boot.empty?
+        raise Error, "#{list.size} tests were recorded, but none of them ran a file in this folder. " \
+                     "Run `pitstop record` from the project's own folder (where its code and tests are)."
       end
 
       unseen = by_kind.fetch("boot", []).flat_map { _1["unseen"] || [] }.uniq.sort
@@ -108,11 +116,81 @@ module Pitstop
       end
     end
 
+    # The most a map may unpack to. A real one is a few megabytes; a small file that unpacks to
+    # gigabytes is not a map.
+    MAX_BYTES = 1 << 30
+
+    # The map file is data, and it may come from somewhere else (a CI artifact, a clone), so it's
+    # read with a plain JSON parser and checked before use: what it says becomes arguments to git
+    # and to the test command.
     def self.load(path)
-      data = Zlib::GzipReader.open(path) { JSON.parse(_1.read) }
-      raise Error, "#{path} is from another version of Pitstop: run `pitstop record` again" unless data["version"] == VERSION
+      shown = path.delete_prefix("#{Dir.pwd}/")
+      json = Zlib::GzipReader.open(path) { _1.read(MAX_BYTES + 1) }.to_s
+      raise Error, "#{shown} is too large to be a map: run `pitstop record` again" if json.bytesize > MAX_BYTES
+
+      data = JSON.parse(json)
+      raise Error, "#{shown} isn't a Pitstop map: run `pitstop record` again" unless data.is_a?(Hash)
+      raise Error, "#{shown} is from another version of Pitstop: run `pitstop record` again" unless data["version"] == VERSION
+
+      problem = problem_with(data)
+      raise Error, "#{shown} isn't a map Pitstop wrote (#{problem}): run `pitstop record` again" if problem
 
       new(data)
+    rescue Zlib::Error, JSON::ParserError, EOFError, EncodingError => e
+      raise Error, "#{shown} can't be read (#{e.message.lines.first.to_s.strip[0, 80]}): run `pitstop record` again"
+    end
+
+    COMMIT = /\A\h{40}(\h{24})?\z/
+    STATUSES = %w[pass fail skip].freeze
+
+    # What's wrong with a map's contents, in a few words, or nil.
+    def self.problem_with(data)
+      return "its commit" unless data["commit"].is_a?(String) && data["commit"].match?(COMMIT)
+
+      tests = data["tests"]
+      return "its tests" unless tests.is_a?(Array) && tests.all? { test?(_1) }
+      return "its framework" unless data["framework"].nil? || data["framework"].is_a?(String)
+
+      %w[dirty unseen].each do |key|
+        list = data[key] || []
+        return "its #{key} files" unless list.is_a?(Array) && list.all? { _1.is_a?(String) && !_1.include?("\0") }
+      end
+      return "its unseen files" unless (data["unseen"] || []).all? { inside?(_1) }
+
+      boot = data["boot"]
+      return "its boot lines" unless boot.is_a?(Hash) && boot.all? { |path, ranges| inside?(path) && ranges?(ranges) }
+
+      files = data["files"]
+      return "its files" unless files.is_a?(Hash)
+
+      files.each do |path, sets|
+        return "its files" unless inside?(path) && sets.is_a?(Array)
+
+        sets.each do |set|
+          return "its files" unless set.is_a?(Array) && set.size == 2 && ranges?(set[0])
+
+          numbers = set[1]
+          return "its files" unless numbers.is_a?(Array) && numbers.all?(Integer)
+          return "its files" unless numbers.empty? || (numbers.min >= 0 && numbers.max < tests.size)
+        end
+      end
+      nil
+    end
+
+    def self.test?(test)
+      test.is_a?(Array) && test[0].is_a?(String) && (test[1].nil? || inside?(test[1])) &&
+        (test[2].nil? || test[2].is_a?(Integer)) && STATUSES.include?(test[3]) && (test[4].nil? || test[4].is_a?(Numeric))
+    end
+
+    def self.ranges?(ranges)
+      ranges.is_a?(Array) && ranges.all? { _1.is_a?(Array) && _1.size == 2 && _1[0].is_a?(Integer) && _1[1].is_a?(Integer) }
+    end
+
+    # A path inside the project's folder: relative, never climbing out of it. The recorder only
+    # ever writes such paths, and a test file's path is handed to the test command.
+    def self.inside?(path)
+      path.is_a?(String) && !path.empty? && !path.start_with?("/") && !path.match?(/\A[A-Za-z]:|\0/) &&
+        !path.split(%r{[/\\]}).include?("..")
     end
 
     def initialize(data)
@@ -127,10 +205,16 @@ module Pitstop
       @warnings = []
     end
 
+    # Written beside the map and then moved into place, so a reader never sees half a map, and
+    # whatever was at `path` (even a link to another file) is replaced, never written through.
     def save(path)
       dir = File.dirname(path)
       Dir.mkdir(dir) unless Dir.exist?(dir)
-      Zlib::GzipWriter.open(path) { _1.write(JSON.generate(@data)) }
+      partial = "#{path}.#{Process.pid}.tmp"
+      Zlib::GzipWriter.open(partial) { _1.write(JSON.generate(@data)) }
+      File.rename(partial, path)
+    ensure
+      File.delete(partial) if partial && File.exist?(partial)
     end
 
     def covered?(path) = @files.key?(path)

@@ -37,6 +37,14 @@ class RulesTest < Minitest::Test
     assert_equal "test fixture (not followed yet)", rules.classify("test/fixtures/cards.yml").reason
   end
 
+  # The settings file decides what's ignored, so no pattern in it can make a change to the
+  # settings file itself pick nothing.
+  def test_no_pattern_can_ignore_the_settings_file
+    custom = Pitstop::Rules.new("ignore" => ["**/*", ".pitstop.yml", ".*"])
+    assert_equal :ignore, custom.classify("app/models/cart.rb").kind
+    assert_equal :global, custom.classify(".pitstop.yml").kind
+  end
+
   def test_overrides_add_to_the_defaults
     custom = Pitstop::Rules.new("ignore" => ["Gemfile.saas*"])
     assert_equal :ignore, custom.classify("Gemfile.saas.lock").kind
