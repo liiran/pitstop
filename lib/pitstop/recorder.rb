@@ -413,19 +413,22 @@ module Pitstop
       end
     end
 
+    # Wraps `time_it`, which Minitest::Test#run puts around a whole test (setup, the test,
+    # teardown), not `run` itself. Other gems replace `run` by renaming it (minitest-reporters
+    # does), and a renamed method with a wrapper already around it ends up calling itself forever.
     module MinitestTest
-      def run
+      def time_it
         klass = self.class
         id = Watch.minitest_id(klass, name)
         file = Pitstop::Record.relative(Watch.minitest_file(klass, name))
         Pitstop::Record.test_started(id, file)
         result = super
-        status = if result.skipped? then "skip"
-                 elsif result.passed? then "pass"
+        status = if skipped? then "skip"
+                 elsif passed? then "pass"
                  else "fail"
                  end
         Pitstop::Record.test_finished(framework: "minitest", id:, file:, line: Watch.minitest_line(klass, name),
-                                      status:, ms: (result.time * 1000).round(3))
+                                      status:, ms: (time.to_f * 1000).round(3))
         result
       end
     end

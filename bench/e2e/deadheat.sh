@@ -10,4 +10,4 @@ rm -rf .pitstop
 git config --global --add safe.directory '*'
 bundle install --quiet >/dev/null 2>&1
 export DB=sqlite
-ruby /pitstop/bench/e2e/check.rb /work/deadheat /pitstop/bench/e2e/deadheat.txt -- bundle exec rake test:once
+PLAIN_COMMAND="bundle exec rake test:once" ruby /pitstop/bench/e2e/check.rb /work/deadheat /pitstop/bench/e2e/deadheat.txt -- bundle exec rake test:once

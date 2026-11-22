@@ -379,6 +379,38 @@ class SafetyTest < Minitest::Test
     end
   end
 
+  # --- other gems --------------------------------------------------------------------------------
+
+  # minitest-reporters replaces Minitest::Test#run by renaming it. A wrapper Pitstop had put
+  # around `run` first made the renamed method call itself until the stack ran out, in every
+  # test, while recording and while running.
+  def test_a_gem_that_renames_minitests_run_method
+    skip "minitest-reporters not installed" unless Fixture.latest("minitest-reporters", 1)
+    helper = <<~RUBY
+      gem "minitest", ENV["MT_VERSION"] if ENV["MT_VERSION"]
+      require "minitest/autorun"
+      require "minitest/reporters"
+      Minitest::Reporters.use! Minitest::Reporters::BaseReporter.new
+      $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+    RUBY
+    Fixture.minitest_versions.each do |version|
+      Fixture.project(Shop::FILES.merge("test/test_helper.rb" => helper)) do |shop|
+        shop.commit("start")
+        env = { "MT_VERSION" => version }
+        code, out, err = shop.pitstop("record", env:)
+        assert_equal 0, code, "Minitest #{version}: #{out}#{err}"
+        assert_match "mapped 5 tests", out
+        assert_empty err
+
+        shop.edit("lib/price.rb", "cents / 100", "cents.div(100)")
+        assert_equal %w[PriceTest#test_format ReceiptTest#test_prints_a_price], shop.selection["tests"].sort
+        code, out, err = shop.pitstop("run", env:)
+        assert_equal 0, code, "Minitest #{version}: #{out}#{err}"
+        assert_match "Pitstop: ran 2 of 2 selected tests", out
+      end
+    end
+  end
+
   # Ctrl-C, or a CI job being cancelled, while the tests run: the test command stops too, the
   # run's working files are removed, and Pitstop ends the way a stopped program does.
   def test_stopping_pitstop_stops_the_test_command_and_cleans_up

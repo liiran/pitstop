@@ -22,9 +22,16 @@ def sh(*command)
 end
 
 out, code, seconds = sh(*pitstop, "record", *(["--", *record_command] unless record_command.empty?))
-puts out.lines.grep(/pitstop|Pitstop|runs,|examples,/i).join
+puts out.lines.grep(/pitstop|Pitstop|runs,|tests,|examples,/i).join
 puts "record: exit #{code} in #{seconds}s"
 abort "record failed" unless File.exist?(".pitstop/map.json.gz")
+
+# The whole suite without Pitstop, in the same session, to compare run times with. (After the
+# recording, so both start with warm caches.)
+if (plain = ENV["PLAIN_COMMAND"])
+  _, plain_code, plain_seconds = sh(*plain.split)
+  puts "whole suite without Pitstop (`#{plain}`): exit #{plain_code} in #{plain_seconds}s"
+end
 
 # Tests already failing when the map was made always run, and fail again: a run whose only
 # failures are those passes.
@@ -51,7 +58,7 @@ rows = File.readlines(list, chomp: true).reject { _1.strip.empty? || _1.start_wi
   abort "#{path}: #{from.inspect} not found" unless source.include?(from)
   File.write(path, source.sub(from, to))
   begin
-    listed, = sh(*pitstop, "list", "--json")
+    listed, _, picking = sh(*pitstop, "list", "--json")
     share = begin
       time_share(JSON.parse(listed[/^\{.*\}/m]), map, ms, total_ms)
     rescue StandardError => e
@@ -60,7 +67,7 @@ rows = File.readlines(list, chomp: true).reject { _1.strip.empty? || _1.start_wi
     out, code, seconds = sh(*pitstop, "run", *(["--", *record_command] unless record_command.empty?))
     picked = out[/^(?:Running|Would run) (.*)$/, 1] || out[/^Nothing to run.*$/] || "?"
     checked = out[/^Pitstop: ran .*$/] || "-"
-    framework = out.scan(/^(\d+) (?:runs|examples),/).flatten.map(&:to_i).sum
+    framework = out.scan(/^(\d+) (?:runs|tests|examples),/).flatten.map(&:to_i).sum
     failures = out.scan(/(\d+) (?:failures|errors)/).flatten.map(&:to_i).sum
     outcome = case code
               when 0 then out.include?("Nothing to run") ? "nothing" : "pass"
@@ -72,7 +79,7 @@ rows = File.readlines(list, chomp: true).reject { _1.strip.empty? || _1.start_wi
     # What the framework says the run took, and (RSpec) how long loading the files took.
     took = out[/^Finished in .*$/]&.strip || "-"
     puts "#{ok ? 'OK  ' : 'BAD '} #{label}: #{picked} | #{checked} | framework ran #{framework} | #{outcome} in #{seconds}s"
-    puts "     #{share} | #{took}"
+    puts "     #{share} | #{took} | picking took #{picking}s"
     problems.each { puts "     #{_1}" }
     puts out unless ok
     [label, picked, checked, framework, outcome, expected, seconds, ok]

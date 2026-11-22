@@ -8,4 +8,4 @@ rm -rf /work && mkdir -p /work && cp -r /pitstop/bench/apps/rubocop /work/ruboco
 rm -rf .pitstop
 git config --global --add safe.directory '*'
 bundle install --quiet >/dev/null 2>&1
-ruby /pitstop/bench/e2e/check.rb /work/rubocop /pitstop/bench/e2e/rubocop.txt
+PLAIN_COMMAND="bundle exec rspec" ruby /pitstop/bench/e2e/check.rb /work/rubocop /pitstop/bench/e2e/rubocop.txt

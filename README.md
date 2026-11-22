@@ -32,6 +32,24 @@ changes count the same.
 The test command is `bin/rails test`, `bundle exec rspec` (a project with `spec/` and no `test/`) or
 `bundle exec rake test`. Pick another with `pitstop record -- <command>`, or in `.pitstop.yml`.
 
+### In CI
+
+- **On your main branch:** run `pitstop record` instead of the plain test command. It runs every
+  test (so main is always fully tested) and leaves `.pitstop/map.json.gz`. Keep that file for
+  other jobs, as a cache or an artifact.
+- **On a pull request:** fetch main's map into `.pitstop/`, then `pitstop run`. With no map there,
+  run your normal test command instead.
+
+The pull request's checkout needs the commit the map was made at (a full clone, not a shallow
+one). If that commit is missing, Pitstop runs everything and says why.
+
+| Exit status | Meaning |
+|---|---|
+| 0 | the selected tests passed (or nothing needed running) |
+| 1 | tests failed, or the map couldn't be used |
+| 3 | some selected tests didn't run, so the change isn't covered |
+| 64 | wrong usage: no map yet, an unknown option, a bad `.pitstop.yml` |
+
 ## What it picks
 
 | You changed | Pitstop runs |
@@ -153,7 +171,7 @@ The tests build small throwaway projects in real git repos and run the real `pit
 For the framework matrix, install the extra gems outside your system gems:
 
 ```sh
-gem install --install-dir tmp/gems minitest:6.1.0 minitest:5.27.0 rspec activesupport simplecov
+gem install --install-dir tmp/gems minitest:6.1.0 minitest:5.27.0 rspec activesupport simplecov minitest-reporters
 ```
 
 Anything that forks (Rails' parallel workers, a test that forks) is tested on Linux; on Windows

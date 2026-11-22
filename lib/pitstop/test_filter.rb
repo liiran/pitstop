@@ -120,8 +120,11 @@ module Pitstop
     end
 
     # Logs each test the framework ran; tests run inside another test are part of that test.
+    # It wraps `time_it`, which Minitest::Test#run puts around a whole test, not `run` itself:
+    # other gems replace `run` by renaming it (minitest-reporters does), and a renamed method with
+    # a wrapper already around it ends up calling itself forever.
     module MinitestLog
-      def run
+      def time_it
         return super if Thread.current[:pitstop_in_test]
 
         id = Watch.minitest_id(self.class, name)
@@ -133,8 +136,8 @@ module Pitstop
           Thread.current[:pitstop_in_test] = nil
           ENV.delete(Pitstop::Filter::TEST_ENV)
         end
-        status = if result.skipped? then "skip"
-                 elsif result.passed? then "pass"
+        status = if skipped? then "skip"
+                 elsif passed? then "pass"
                  else "fail"
                  end
         Pitstop::Filter.ran(id, Watch.minitest_file(self.class, name), status)
