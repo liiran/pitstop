@@ -50,4 +50,21 @@ class RulesTest < Minitest::Test
     assert_equal :ignore, custom.classify("Gemfile.saas.lock").kind
     assert_equal :global, custom.classify("Gemfile.lock").kind
   end
+
+  # The built-in rules say docs and bin/ scripts can't affect a test. A project where one does (a
+  # spec that checks the changelog's format, a test that runs a script) has to be able to say so.
+  def test_your_own_patterns_come_before_the_built_in_ones
+    custom = Pitstop::Rules.new("global" => ["changelog/**"], "ruby" => ["bin/tool"], "tests" => ["script/checks/*_test.rb"])
+    assert_equal :global, custom.classify("changelog/new_x.md").kind
+    assert_equal :ignore, custom.classify("README.md").kind
+    assert_equal :ruby, custom.classify("bin/tool").kind
+    assert_equal :ignore, custom.classify("bin/setup").kind
+    assert_equal :test, custom.classify("script/checks/links_test.rb").kind
+  end
+
+  def test_running_everything_wins_where_two_of_your_own_lists_match
+    custom = Pitstop::Rules.new("ignore" => ["data/**"], "global" => ["data/prices.json"])
+    assert_equal :global, custom.classify("data/prices.json").kind
+    assert_equal :ignore, custom.classify("data/notes.json").kind
+  end
 end

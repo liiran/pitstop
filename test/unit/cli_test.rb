@@ -173,6 +173,16 @@ class CLITest < Minitest::Test
       assert_equal 0, code
       assert_match "custom_command", out
 
+      # A docs file that a test reads: `global` overrules the built-in rule that docs run nothing.
+      shop.write(".pitstop.yml", "global: [README.md]\n")
+      shop.commit("the readme is checked by a test")
+      shop.pitstop("record")
+      shop.edit("README.md", "Shop", "The shop")
+      code, out, = shop.pitstop("list")
+      assert_equal 0, code
+      assert_match "README.md  app-wide file  → all tests", out
+      shop.git("checkout", "-q", "README.md")
+
       shop.write(".pitstop.yml", "ignored: [x]\n")
       code, _, err = shop.pitstop("list")
       assert_equal 64, code

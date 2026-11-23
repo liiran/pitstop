@@ -36,25 +36,25 @@ module Pitstop
 
     FLAGS = File::FNM_PATHNAME | File::FNM_EXTGLOB | File::FNM_DOTMATCH
 
+    # "docs/**" should mean everything under docs/, at any depth.
+    DEEP = ->(pattern) { pattern.sub(%r{/\*\*\z}, "/**/*") }
+
     def initialize(overrides = {})
-      @lists = DEFAULTS.to_h do |key, list|
-        # "docs/**" should mean everything under docs/, at any depth.
-        [key, (list + Array(overrides[key])).map { _1.sub(%r{/\*\*\z}, "/**/*") }]
-      end
+      @own = DEFAULTS.to_h { |key, _| [key, Array(overrides[key]).map(&DEEP)] }
+      @built_in = DEFAULTS.transform_values { _1.map(&DEEP) }
     end
 
     def classify(path)
       # Before anything else: these settings decide what's ignored, so no `ignore` pattern (not
       # even "**/*") can hide a change to them.
       return Verdict.new(:global, "Pitstop's settings") if path == ".pitstop.yml"
-      return Verdict.new(:ignore, "docs or project metadata") if match?("ignore", path)
-      return Verdict.new(:global, "app-wide file") if match?("global", path)
-      return Verdict.new(:test, "test file") if match?("tests", path)
-      return Verdict.new(:global, "test support code") if match?("test_support", path)
-      return Verdict.new(:ruby, "Ruby code") if match?("ruby", path)
-      return Verdict.new(:browser, "browser-only file") if match?("browser", path)
 
-      Verdict.new(:other, "#{other_kind(path)} (not followed yet)")
+      # Your own patterns come before the built-in ones, so they can overrule them either way:
+      # `ignore: ["Gemfile.saas*"]` for a lockfile the tests never use, `global: ["changelog/**"]`
+      # for docs that a test reads. Where two of your own lists match, running everything wins.
+      among(@own, %w[global ignore tests test_support ruby browser], path) ||
+        among(@built_in, %w[ignore global tests test_support ruby browser], path) ||
+        Verdict.new(:other, "#{other_kind(path)} (not followed yet)")
     end
 
     # A short name for a non-Ruby file, so reports can say what blocks selection most often.
@@ -72,8 +72,16 @@ module Pitstop
 
     private
 
-    def match?(list, path)
-      @lists.fetch(list).any? { |pattern| File.fnmatch?(pattern, path, FLAGS) }
+    VERDICTS = {
+      "ignore" => Verdict.new(:ignore, "docs or project metadata"), "global" => Verdict.new(:global, "app-wide file"),
+      "tests" => Verdict.new(:test, "test file"), "test_support" => Verdict.new(:global, "test support code"),
+      "ruby" => Verdict.new(:ruby, "Ruby code"), "browser" => Verdict.new(:browser, "browser-only file")
+    }.transform_values(&:freeze).freeze
+
+    # The verdict of the first list, in this order, with a pattern the path matches.
+    def among(lists, order, path)
+      name = order.find { |list| lists.fetch(list).any? { |pattern| File.fnmatch?(pattern, path, FLAGS) } }
+      VERDICTS[name]
     end
   end
 end
