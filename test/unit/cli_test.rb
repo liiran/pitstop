@@ -292,6 +292,44 @@ class CLITest < Minitest::Test
     end
   end
 
+  # Two test files can open the same test class (a class name copied from one file to the next).
+  # Each test belongs to the file it's written in: that's the file handed to a command that takes
+  # test files, such as `bin/rails test`, and the file whose change runs the test.
+  def test_a_test_class_opened_in_two_test_files
+    rails = <<~RUBY
+      abort "only `test` here" unless ARGV.shift == "test"
+      (ARGV.empty? ? Dir["test/*_test.rb"].sort : ARGV).each { require File.expand_path(_1) }
+    RUBY
+    test = ->(lib, body) { "require_relative 'test_helper'\nrequire '#{lib}'\nclass ShopTest < Minitest::Test\n  #{body}\nend\n" }
+    Fixture.project(
+      "lib/cart.rb" => Shop::CART, "lib/price.rb" => Shop::PRICE, "test/test_helper.rb" => Shop::HELPER, "bin/rails" => rails,
+      "test/cart_test.rb" => test.("cart", "def test_total = assert_equal(3, Cart.new([1, 2]).total)"),
+      "test/price_test.rb" => test.("price", "def test_format = assert_equal('$1.05', Price.format(105))")
+    ) do |shop|
+      shop.commit
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      assert_equal({ "ShopTest#test_total" => "test/cart_test.rb", "ShopTest#test_format" => "test/price_test.rb" },
+                   shop.map["tests"].to_h { [_1[0], _1[1]] })
+
+      # Only the second file's test ran this line, so only the second file is handed over.
+      shop.edit("lib/price.rb", "cents / 100", "cents.div(100)")
+      code, out, err = run_tests(shop)
+      assert_equal 0, code, out + err
+      assert_match "Pitstop: ran 1 of 1 selected tests", out
+      assert_equal 1, @ran
+      shop.git("checkout", "-q", "lib/price.rb")
+
+      # The second file changes, and the command loads every test file: its own test runs.
+      shop.edit("test/price_test.rb", "def test_format", "# the same test\n  def test_format")
+      code, out, err = run_tests(shop, "--", Gem.ruby, "bin/rails", "test", "test/cart_test.rb", "test/price_test.rb")
+      assert_equal 0, code, out + err
+      assert_match "plus 1 from whole test files", out
+      assert_equal 1, @ran
+      assert_empty err
+    end
+  end
+
   # A test of a test helper builds a test class and runs it inside itself. The inner test isn't
   # one Minitest schedules: it's part of the outer test, when recording and when running.
   def test_a_test_run_inside_another_test_belongs_to_it

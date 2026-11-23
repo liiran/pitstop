@@ -10,15 +10,24 @@ module Pitstop
     # definitions, rather than wrapping Kernel#require, keeps out of the way of Bootsnap, Zeitwerk
     # and Ruby's bundled-gems shim, which all rename `require` and would loop through a wrapper.
     def self.frameworks(minitest: nil, rspec: nil, simplecov: nil)
+      test_class = nil
       TracePoint.new(:class) do |tp|
         # Module#name itself: some classes redefine `name` (or `self.name`) as a DSL.
         case MODULE_NAME.bind_call(tp.self)
-        when "Minitest::Test" then minitest&.call
+        when "Minitest::Test"
+          test_class = tp.self
+          minitest&.call
         when "RSpec::Core::Runner" then rspec&.call(tp.self)
         when "SimpleCov" then simplecov&.call(tp.self)
+        else
+          (OPENED[tp.self] ||= []) << tp.path if test_class && tp.self.is_a?(Class) && tp.self < test_class
         end
       end.tap(&:enable)
     end
+
+    # The files that open each Minitest test class, in the order they loaded. Nearly always one
+    # file; when two test files open the same class, each test belongs to the file it's written in.
+    OPENED = {}.compare_by_identity
 
     # Test names and file names go into line-per-entry, tab-separated files (the selection, and
     # the list of tests that ran). A name can hold a newline or a tab (`define_method("test a\nb")`),
@@ -36,20 +45,28 @@ module Pitstop
       "#{MODULE_NAME.bind_call(klass)}##{method_name}".force_encoding(Encoding::UTF_8).scrub("?").delete("\0")
     end
 
-    # The file a Minitest test belongs to: the file that defines its class (so tests mixed in from
-    # a module still belong to the test file that runs them), or else the test method's file.
+    # The file a Minitest test belongs to: the file to hand the test command so the test runs, and
+    # the file whose change runs it. That's the file that defines its class (so tests mixed in
+    # from a module, or made by a helper, still belong to the test file that runs them), or else
+    # the file the test method is written in.
     def self.minitest_file(klass, method_name)
+      method = begin
+        klass.instance_method(method_name)
+      rescue NameError
+        nil
+      end
+      written_in = method&.source_location&.first
       name = MODULE_NAME.bind_call(klass)
       class_file = begin
         Object.const_source_location(name)&.first if name&.match?(/\A[A-Z]\w*(::[A-Z]\w*)*\z/)
       rescue NameError
         nil
       end
-      return class_file if class_file && !class_file.empty?
+      return written_in if class_file.nil? || class_file.empty?
+      # A second test file that opens the same class: the tests written there are that file's.
+      return written_in if written_in && written_in != class_file && method.owner == klass && OPENED[klass]&.include?(written_in)
 
-      klass.instance_method(method_name).source_location&.first
-    rescue NameError
-      nil
+      class_file
     end
 
     def self.minitest_line(klass, method_name)
