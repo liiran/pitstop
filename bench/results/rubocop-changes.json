@@ -1,0 +1,212 @@
+{
+  "app": "rubocop",
+  "commit": "a97adf34c",
+  "date": "2026-11-23",
+  "machine": {
+    "cpu": "AMD Ryzen 5 9600X 6-Core Processor",
+    "cores": 12,
+    "ruby": "ruby 4.0.10 (2026-11-19 revision a704b7cd95) +PRISM [x86_64-linux]",
+    "terminal": true,
+    "pitstop": "e5fed82+changes"
+  },
+  "load_average": [
+    2.06,
+    2.05
+  ],
+  "command": "(the default)",
+  "plain_command": "bundle exec rspec",
+  "plain_exit": 1,
+  "rounds": 2,
+  "tests": 36505,
+  "already_failing": 5,
+  "plain_s": [
+    192.81,
+    199.53
+  ],
+  "record_s": [
+    270.54
+  ],
+  "map_kb": 3318,
+  "changes": [
+    {
+      "label": "docs only: a changelog entry (only the always-run tests)",
+      "path": "changelog/fix_an_example_for_this_check.md",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.34,
+        0.42
+      ],
+      "run_s": [
+        10.08,
+        10.55
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 8,
+      "share_of_test_time": 4.1
+    },
+    {
+      "label": "comment only (the same always-run tests)",
+      "path": "lib/rubocop/cop/style/negated_if.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.34,
+        0.34
+      ],
+      "run_s": [
+        10.02,
+        10.15
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 8,
+      "share_of_test_time": 4.1
+    },
+    {
+      "label": "spec file",
+      "path": "spec/rubocop/cop/style/negated_if_spec.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.34,
+        0.36
+      ],
+      "run_s": [
+        10.3,
+        10.86
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 23,
+      "share_of_test_time": 4.1
+    },
+    {
+      "label": "method, same behaviour",
+      "path": "lib/rubocop/cop/style/negated_if.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.38,
+        0.41
+      ],
+      "run_s": [
+        87.15,
+        89.7
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 833,
+      "share_of_test_time": 54.7
+    },
+    {
+      "label": "planted bug in a cop",
+      "path": "lib/rubocop/cop/style/negated_if.rb",
+      "expected": "fail",
+      "ok": true,
+      "pick_s": [
+        0.36,
+        0.37
+      ],
+      "run_s": [
+        86.55,
+        89.55
+      ],
+      "outcome": "fail",
+      "run_all": null,
+      "tests_run": 833,
+      "share_of_test_time": 54.7
+    },
+    {
+      "label": "planted bug in a shared mixin",
+      "path": "lib/rubocop/cop/mixin/configurable_enforced_style.rb",
+      "expected": "fail",
+      "ok": true,
+      "pick_s": [
+        0.35,
+        0.37
+      ],
+      "run_s": [
+        102.46,
+        100.8
+      ],
+      "outcome": "fail",
+      "run_all": null,
+      "tests_run": 2128,
+      "share_of_test_time": 61.4
+    },
+    {
+      "label": "output formatter",
+      "path": "lib/rubocop/formatter/progress_formatter.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.35,
+        0.36
+      ],
+      "run_s": [
+        78.63,
+        81.23
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 882,
+      "share_of_test_time": 54.2
+    },
+    {
+      "label": "command line",
+      "path": "lib/rubocop/cli.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.35,
+        0.35
+      ],
+      "run_s": [
+        103.14,
+        105.95
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 942,
+      "share_of_test_time": 70.5
+    },
+    {
+      "label": "method every cop run goes through",
+      "path": "lib/rubocop/cop/commissioner.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.41,
+        0.46
+      ],
+      "run_s": [
+        180.59,
+        184.43
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 33661,
+      "share_of_test_time": 92.6
+    },
+    {
+      "label": "default settings (runs everything)",
+      "path": "config/default.yml",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.39,
+        0.41
+      ],
+      "run_s": [
+        191.63,
+        208.56
+      ],
+      "outcome": "pass",
+      "run_all": "config/default.yml: app-wide file",
+      "tests_run": 36505,
+      "share_of_test_time": 100.0
+    }
+  ]
+}

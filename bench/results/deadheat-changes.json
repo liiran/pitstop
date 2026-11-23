@@ -1,0 +1,135 @@
+{
+  "app": "deadheat",
+  "commit": "c649a88",
+  "date": "2026-11-23",
+  "machine": {
+    "cpu": "AMD Ryzen 5 9600X 6-Core Processor",
+    "cores": 12,
+    "ruby": "ruby 3.4.12 (2026-10-23 revision 366f5fdc00) +PRISM [x86_64-linux]",
+    "terminal": true,
+    "pitstop": "60c30fe+changes"
+  },
+  "load_average": [
+    1.14,
+    0.51
+  ],
+  "command": "bundle exec rake test:once",
+  "plain_command": "bundle exec rake test:once",
+  "plain_exit": 0,
+  "rounds": 3,
+  "tests": 95,
+  "already_failing": 0,
+  "plain_s": [
+    11.63,
+    11.85,
+    11.87
+  ],
+  "record_s": [
+    14.61,
+    14.69,
+    14.83
+  ],
+  "map_kb": 10,
+  "changes": [
+    {
+      "label": "docs only",
+      "path": "README.md",
+      "expected": "nothing",
+      "ok": true,
+      "pick_s": [
+        0.2,
+        0.18,
+        0.16
+      ],
+      "run_s": [
+        0.2,
+        0.16,
+        0.16
+      ],
+      "outcome": "nothing",
+      "run_all": null,
+      "tests_run": 0,
+      "share_of_test_time": 0.0
+    },
+    {
+      "label": "comment only",
+      "path": "lib/deadheat/redact.rb",
+      "expected": "nothing",
+      "ok": true,
+      "pick_s": [
+        0.19,
+        0.17,
+        0.16
+      ],
+      "run_s": [
+        0.19,
+        0.18,
+        0.16
+      ],
+      "outcome": "nothing",
+      "run_all": null,
+      "tests_run": 0,
+      "share_of_test_time": 0.0
+    },
+    {
+      "label": "method, same behaviour",
+      "path": "lib/deadheat/redact.rb",
+      "expected": "pass",
+      "ok": true,
+      "pick_s": [
+        0.22,
+        0.18,
+        0.16
+      ],
+      "run_s": [
+        13.35,
+        12.99,
+        13.19
+      ],
+      "outcome": "pass",
+      "run_all": null,
+      "tests_run": 37,
+      "share_of_test_time": 93.1
+    },
+    {
+      "label": "planted bug in a method",
+      "path": "lib/deadheat/redact.rb",
+      "expected": "fail",
+      "ok": true,
+      "pick_s": [
+        0.16,
+        0.19,
+        0.17
+      ],
+      "run_s": [
+        12.91,
+        12.96,
+        12.85
+      ],
+      "outcome": "fail",
+      "run_all": null,
+      "tests_run": 24,
+      "share_of_test_time": 92.0
+    },
+    {
+      "label": "planted bug in the verdict",
+      "path": "lib/deadheat/verdict.rb",
+      "expected": "fail",
+      "ok": true,
+      "pick_s": [
+        0.18,
+        0.17,
+        0.17
+      ],
+      "run_s": [
+        12.96,
+        12.91,
+        13.02
+      ],
+      "outcome": "fail",
+      "run_all": null,
+      "tests_run": 22,
+      "share_of_test_time": 92.8
+    }
+  ]
+}

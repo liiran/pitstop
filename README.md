@@ -17,6 +17,42 @@ Pitstop: ran 41 of 41 selected tests, plus 12 from whole test files
 
 It works with Minitest (5 and 6, including Rails' parallel workers) and RSpec, and needs Ruby 3.2+.
 
+## How much faster
+
+It depends on what you change. Measured on [Fizzy](https://github.com/basecamp/fizzy), a Rails
+app with 2,708 tests whose whole suite takes 20 seconds:
+
+| You changed | Tests run | Whole suite | `pitstop run` |
+|---|---|---|---|
+| One controller action | 9 | 20.2 s | 2.9 s |
+| One template | 14 | 20.2 s | 3.6 s |
+| One model method | 142 | 20.2 s | 7.4 s |
+| A method nearly every request runs | 1,031 | 20.2 s | 16.3 s |
+| A settings file | all 2,708 | 20.2 s | 21.3 s |
+
+Real commits are not all small changes, so the saving over a project's history is smaller.
+Replaying Fizzy's last 29 commits one by one, `pitstop run` took 5.4 minutes in all where the
+whole suite each time took 10.5 (49% less): 9 commits changed nothing a test can be affected by,
+8 ran between 9 and 132 tests, and 12 ran everything, 10 of them library updates. Over
+RuboCop's last 8 commits it took 8.0 minutes where the whole suite took 26.5 (70% less).
+
+To check that nothing gets missed, small bugs were planted one at a time: 40 in Fizzy's code and
+12 in RuboCop's. The whole suites caught 36 and 11 of them, and so did the tests Pitstop picked,
+every one.
+
+What it costs, and where it doesn't help:
+
+- **Recording the map takes 1.2 to 1.7 times a normal run**, and it has to be redone at every
+  merge: on Fizzy, a map five commits old ran everything at 25 of 26 commits.
+- **A suite whose time goes to a few broad, slow tests gains little.** A small gem whose tests
+  start whole Rails apps gained nothing.
+- **In CI the recording on the main branch has to be earned back.** On Fizzy, a pull request
+  whose tests run once came out 16% behind, and ahead from its second run on. On RuboCop the
+  first run already saved.
+
+How this was measured, every number, and what the numbers don't show:
+[bench/RESULTS.md](bench/RESULTS.md).
+
 ## How to use it
 
 ```sh
@@ -59,7 +95,7 @@ one). If that commit is missing, Pitstop runs everything and says why.
 | Code outside methods (`MAX = 3`, `validates`, `include`), or added a method | every test that ran the file |
 | A template Ruby's coverage saw (ERB) | every test that rendered it |
 | A deleted or renamed file | every test that ran the old file |
-| A test file (changed or new) | that whole file |
+| A test file (changed or new) | that whole file, if the test command runs it (see below) |
 | `Gemfile.lock`, `config/**`, `db/schema.rb`, migrations, test helpers and support files | everything (said why) |
 | Any other file no recorded test read (JSON, YAML…) | everything (said why) |
 | Docs, CI settings, CSS, JavaScript, images | nothing |
@@ -67,6 +103,15 @@ one). If that commit is missing, Pitstop runs everything and says why.
 
 Tests that failed or were skipped when the map was made always run: their lines weren't all
 recorded. If the map's commit isn't in your repo, everything runs.
+
+Two kinds of test need care, because "docs and browser files run nothing" is wrong for them:
+
+- **A test that reads a docs file**, such as a spec that checks the changelog's format. List the
+  file under `global` in `.pitstop.yml`, so a change to it runs everything.
+- **Tests that drive a browser** (Rails system tests). They depend on CSS and JavaScript, which
+  Pitstop doesn't follow. Run them whole, as their own command. `bin/rails test` leaves
+  `test/system` out, and so does Pitstop: a changed file in there is named in the output as left
+  out, and not run.
 
 ## Checks it makes
 
@@ -100,6 +145,11 @@ global: ["app/lib/money.rb"]   # changes here run everything
 
 The lists are `ignore`, `global`, `browser`, `tests`, `test_support` and `ruby`. A change to
 `.pitstop.yml` itself always runs everything, whatever its `ignore` list says.
+
+Your own patterns are checked before the built-in ones, so they can overrule them either way.
+`ignore: ["Gemfile.saas*"]` stops a lockfile your tests never use from running everything.
+`global: ["changelog/**"]` makes a change to a docs folder run everything, for a project where a
+test reads it. Where two of your own lists match the same file, `global` wins.
 
 `command` is a list of words (`bin/rails test` is two), started directly: nothing in it is read
 by a shell, so `&&`, `>` and `$VAR` mean nothing there. For those, point it at a script.
@@ -176,3 +226,7 @@ gem install --install-dir tmp/gems minitest:6.1.0 minitest:5.27.0 rspec activesu
 
 Anything that forks (Rails' parallel workers, a test that forks) is tested on Linux; on Windows
 those tests skip. `compose.yaml` has a Linux environment.
+
+`bench/` holds the scripts that run Pitstop on real apps (one change at a time, their real
+commits replayed, planted bugs), the numbers they produced (`bench/results/`) and the page
+written from them, [bench/RESULTS.md](bench/RESULTS.md).

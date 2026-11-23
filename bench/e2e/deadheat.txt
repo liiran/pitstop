@@ -1,4 +1,5 @@
 # label | path | text to replace | replacement | expected
+docs only | README.md | (append) | \nOne more line.\n | nothing
 comment only | lib/deadheat/redact.rb |     def value(column, text) |     # The text, or the mask for a hidden column.\n    def value(column, text) | nothing
 method, same behaviour | lib/deadheat/redact.rb |       return false if column.nil? |       return false unless column | pass
 planted bug in a method | lib/deadheat/redact.rb |       hidden?(column) ? MASK : text |       text | fail

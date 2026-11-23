@@ -1,6 +1,11 @@
 # label | path | text to replace | replacement | expected
-comment only (only the always-run tests) | lib/rubocop/cop/style/negated_if.rb |         def on_if(node) |         # Checks every if.\n        def on_if(node) | pass
+docs only: a changelog entry (only the always-run tests) | changelog/fix_an_example_for_this_check.md | (new file) | * [#1](https://example.com/1): Fix an example. ([@example][])\n | pass
+comment only (the same always-run tests) | lib/rubocop/cop/style/negated_if.rb |         def on_if(node) |         # Checks every if.\n        def on_if(node) | pass
+spec file | spec/rubocop/cop/style/negated_if_spec.rb | RSpec.describe | # Same specs.\nRSpec.describe | pass
 method, same behaviour | lib/rubocop/cop/style/negated_if.rb | format(MSG, inverse: node.inverse_keyword, current: node.keyword) | format(MSG, current: node.keyword, inverse: node.inverse_keyword) | pass
 planted bug in a cop | lib/rubocop/cop/style/negated_if.rb | return if node.unless? || node.elsif? || node.ternary? | return if node.unless? || node.ternary? | fail
 planted bug in a shared mixin | lib/rubocop/cop/mixin/configurable_enforced_style.rb | if supported_styles.size != 2 | if supported_styles.size != 3 | fail
-spec file | spec/rubocop/cop/style/negated_if_spec.rb | RSpec.describe | # Same specs.\nRSpec.describe | pass
+output formatter | lib/rubocop/formatter/progress_formatter.rb | output.write mark | output.write(mark) | pass
+command line | lib/rubocop/cli.rb | formatter = cfg['DefaultFormatter'] || 'progress' | formatter = (cfg['DefaultFormatter'] || 'progress') | pass
+method every cop run goes through | lib/rubocop/cop/commissioner.rb | walk(processed_source.ast) unless @cops.empty? | walk(processed_source.ast) if @cops.any? | pass
+default settings (runs everything) | config/default.yml | # Common configuration. | # Common configuration | pass

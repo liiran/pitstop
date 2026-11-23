@@ -1,0 +1,12 @@
+{"path":"lib/rubocop/cop/layout/space_after_not.rb","line":23,"method":"on_send","what":"if → unless","picked":180,"run_s":41.57,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/generator/registration_injector.rb","line":138,"method":"first_directive_position","what":"if → unless","picked":58,"run_s":48.67,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/layout/empty_lines_around_access_modifier.rb","line":192,"method":"message_for_around_style","what":"if → unless","picked":661,"run_s":53.34,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/layout/case_indentation.rb","line":149,"method":"enforced_style_end?","what":"== → !=","picked":617,"run_s":62.28,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/style/partition_instead_of_double_select.rb","line":192,"method":"negated_body?","what":"&& → ||","picked":51,"run_s":12.32,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/layout/first_argument_indentation.rb","line":354,"method":"argument_alignment_applies?","what":">= → >","picked":557,"run_s":51.16,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/style/lambda.rb","line":104,"method":"rescue_or_ensure_clause?","what":"false → true","picked":483,"run_s":51.21,"run_exit":1,"caught_by":"nothing"}
+{"path":"lib/rubocop/cop/style/combinable_loops.rb","line":107,"method":"same_collection_looping_block?","what":"if → unless","picked":460,"run_s":51.98,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/base.rb","line":604,"method":"find_severity","what":"|| → &&","picked":33678,"run_s":535.27,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/style/redundant_begin.rb","line":298,"method":"valid_context_using_only_begin?","what":"|| → &&","picked":513,"run_s":52.1,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/mixin/hash_shorthand_syntax.rb","line":209,"method":"hash_with_mixed_shorthand_syntax?","what":"> → >=","picked":236,"run_s":33.57,"run_exit":1,"caught_by":"selection"}
+{"path":"lib/rubocop/cop/style/trailing_body_on_method_definition.rb","line":40,"method":"on_def","what":"if → unless","picked":1597,"run_s":102.46,"run_exit":1,"caught_by":"selection"}

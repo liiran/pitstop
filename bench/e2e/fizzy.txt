@@ -1,7 +1,14 @@
 # label | path | text to replace | replacement | expected
-comment only (only the always-run skipped tests) | app/models/card/closeable.rb |   def closed? |   # Closed once a closure exists.\n  def closed? | pass
+docs only (only the always-run skipped tests) | README.md | (append) | \nOne more line.\n | pass
+comment only (the same always-run tests) | app/models/card/closeable.rb |   def closed? |   # Closed once a closure exists.\n  def closed? | pass
+planted bug in a lambda scope | app/models/card/golden.rb | scope :golden, -> { joins(:goldness) } | scope :golden, -> { left_outer_joins(:goldness) } | fail
+test file | test/models/card/closeable_test.rb |   setup do |   setup do\n    # same setup | pass
+template | app/views/cards/_delete.html.erb | <span>Delete this card</span> | <span>Delete card</span> | pass
+job | app/jobs/notify_recipients_job.rb | notifiable.notify_recipients | notifiable.notify_recipients.itself | pass
+controller action | app/controllers/cards_controller.rb | format.json { head :no_content } | format.json { head(:no_content) } | pass
 method, same behaviour | app/models/card/golden.rb | goldness.present? | !goldness.nil? | pass
 planted bug in a method | app/models/card/closeable.rb | closure.present? | closure.blank? | fail
-planted bug in a lambda scope | app/models/card/golden.rb | scope :golden, -> { joins(:goldness) } | scope :golden, -> { left_outer_joins(:goldness) } | fail
-template | app/views/cards/_delete.html.erb | <span>Delete this card</span> | <span>Delete card</span> | pass
-test file | test/models/card/closeable_test.rb |   setup do |   setup do\n    # same setup | pass
+view helper | app/helpers/time_helper.rb | datetime: datetime.to_i, | datetime: Integer(datetime.to_i), | pass
+constant in the main model | app/models/card.rb | SEARCH_CONTENT_LIMIT = 32.kilobytes | SEARCH_CONTENT_LIMIT = 32 * 1024 | pass
+method nearly every request runs | app/models/current.rb | if value.present? | unless value.blank? | pass
+test settings (runs everything) | config/environments/test.rb | config.enable_reloading = false | config.enable_reloading = !true | pass

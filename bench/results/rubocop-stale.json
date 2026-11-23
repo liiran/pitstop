@@ -1,0 +1,25 @@
+{
+  "app": "rubocop",
+  "by_map_age": {
+    "1": {
+      "commits": 8,
+      "ran_everything": 0,
+      "mean_share_of_test_time": 36.9
+    },
+    "2": {
+      "commits": 7,
+      "ran_everything": 0,
+      "mean_share_of_test_time": 49.8
+    },
+    "3": {
+      "commits": 6,
+      "ran_everything": 0,
+      "mean_share_of_test_time": 55.3
+    },
+    "5": {
+      "commits": 4,
+      "ran_everything": 0,
+      "mean_share_of_test_time": 64.2
+    }
+  }
+}
