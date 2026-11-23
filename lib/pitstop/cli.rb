@@ -116,14 +116,15 @@ module Pitstop
       end.parse!(@argv)
       map = load_map
       selection = select(map)
+      command = command_from([])
       if json
-        @out.puts(JSON.pretty_generate(as_json(map, selection)))
+        @out.puts(JSON.pretty_generate(as_json(map, selection, command)))
       else
         print_reasons(map, selection, explain:)
         if selection.all?
           say("Would run all #{map.tests.size} tests: #{selection.run_all}")
         else
-          plan = plan_for(map, selection)
+          plan = plan_for(map, selection, command)
           say("Would run #{describe(plan, map)}")
           plan.tests.each { |t| say("    #{t.id}  #{t.file}:#{t.line}") } if explain
         end
@@ -147,7 +148,7 @@ module Pitstop
         return start({ "PITSTOP" => "run", "PITSTOP_TEST" => nil }, command) ? 0 : 1
       end
 
-      plan = plan_for(map, selection)
+      plan = plan_for(map, selection, command)
       if plan.empty?
         say("Nothing to run: none of your changes can affect a test.")
         return 0
@@ -204,9 +205,14 @@ module Pitstop
       nil # already gone
     end
 
-    # The tests to run, leaving out tests whose file is gone (a failed test in a deleted file).
-    def plan_for(map, selection)
-      files = selection.files.select { File.file?(File.join(root, _1)) }.to_set
+    # The tests to run, leaving out tests whose file is gone (a failed test in a deleted file) and
+    # changed test files the test command wouldn't run by itself.
+    def plan_for(map, selection, command)
+      left_out = left_out(map, selection, command)
+      left_out.each do |file|
+        say("  #{file}  left out: `bin/rails test` doesn't run this folder (it has its own command)")
+      end
+      files = (selection.files - left_out).select { File.file?(File.join(root, _1)) }.to_set
       tests = selection.tests.sort.map { map.tests[_1] }.select do |t|
         t.file.nil? || files.include?(t.file) || File.file?(File.join(root, t.file))
       end
@@ -226,14 +232,32 @@ module Pitstop
     # it just loads every test file first. (`rake test` isn't narrowed: Rake 13.4 reads
     # TEST=a,b as a list and older Rakes read it as one glob, so no value works for both.)
     def narrow(command, framework, plan)
-      names = command.map { File.basename(_1, ".*") }
-      extra = if framework == "rspec" && names.include?("rspec") then rspec_args(plan)
-              elsif framework == "minitest" && names.include?("rails") && command.last == "test" then plan.test_files
+      extra = if framework == "rspec" && command.any? { File.basename(_1, ".*") == "rspec" } then rspec_args(plan)
+              elsif rails_test?(command, framework) then plan.test_files
               end
       return command unless extra && extra.all? { passable?(_1) }
 
       # A file whose name starts with a dash would be read as an option.
       command + extra.map { _1.start_with?("-") ? "./#{_1}" : _1 }
+    end
+
+    # `bin/rails test` with no file names, which Pitstop narrows by adding the files it needs.
+    def rails_test?(command, framework)
+      framework == "minitest" && command.last == "test" && command.any? { File.basename(_1, ".*") == "rails" }
+    end
+
+    # Changed test files that `bin/rails test` wouldn't run by itself. With no file names it
+    # leaves some folders out (browser tests in test/system, most of all), and naming a file from
+    # one of them would run tests the whole suite doesn't run. A file with tests in the map stays:
+    # the recorded command ran it.
+    RAILS_LEAVES_OUT = "test/{system,dummy,fixtures}/**/*_test.rb"
+
+    def left_out(map, selection, command)
+      return [] unless rails_test?(command, map.framework)
+
+      pattern = ENV.fetch("DEFAULT_TEST_EXCLUDE", RAILS_LEAVES_OUT)
+      recorded = map.tests.map(&:file).to_set
+      selection.files.select { File.fnmatch?(pattern, _1, Rules::FLAGS) && !recorded.include?(_1) }.sort
     end
 
     # Can this file name be handed to the test command as it is? On Windows, commands such as
@@ -406,11 +430,12 @@ module Pitstop
 
     def printable(text) = text.to_s.scrub("?").gsub(UNPRINTABLE) { _1.dump[1..-2] }
 
-    def as_json(map, selection)
+    def as_json(map, selection, command)
+      left_out = selection.all? ? [] : left_out(map, selection, command)
       {
         map_commit: map.commit, run_all: selection.run_all,
         tests: selection.all? ? map.tests.map(&:id) : selection.tests.sort.map { map.tests[_1].id },
-        files: selection.files.to_a.sort,
+        files: selection.files.to_a.sort - left_out, left_out:,
         reasons: selection.reasons.map(&:to_h)
       }
     end

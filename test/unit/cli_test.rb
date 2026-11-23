@@ -330,6 +330,50 @@ class CLITest < Minitest::Test
     end
   end
 
+  # `bin/rails test` with no file names leaves test/system (browser tests) out. A changed file in
+  # there is a test file, but naming it would run tests the whole suite doesn't run, in a job that
+  # may have no browser. It runs only when the map shows the recorded command ran it.
+  def test_a_changed_test_file_that_bin_rails_test_leaves_out_is_not_run
+    rails = <<~RUBY
+      abort "only `test` here" unless ARGV.shift == "test"
+      (ARGV.empty? ? Dir["test/**/*_test.rb"].sort - Dir["test/system/**/*_test.rb"] : ARGV).each { require File.expand_path(_1) }
+    RUBY
+    browser_test = <<~RUBY
+      require_relative "../test_helper"
+      class CheckoutTest < Minitest::Test
+        def test_checks_out = assert(ENV["BROWSER"], "there is no browser here")
+      end
+    RUBY
+    Fixture.project("lib/cart.rb" => Shop::CART, "test/test_helper.rb" => Shop::HELPER, "test/cart_test.rb" => Shop::CART_TEST,
+                    "bin/rails" => rails, "test/system/checkout_test.rb" => browser_test) do |shop|
+      shop.commit
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      assert_equal %w[test/cart_test.rb], shop.map["tests"].map { _1[1] }.uniq, "the plain command doesn't run test/system"
+
+      shop.edit("lib/cart.rb", "@items.sum", "@items.sum(0)")
+      shop.edit("test/system/checkout_test.rb", "def test_checks_out", "# the same test\n  def test_checks_out")
+      assert_equal [[], %w[test/system/checkout_test.rb]], shop.selection.values_at("files", "left_out")
+      code, out, err = run_tests(shop)
+      assert_equal 0, code, out + err
+      assert_match "test/system/checkout_test.rb  left out: `bin/rails test` doesn't run this folder", out
+      assert_match "Pitstop: ran 1 of 1 selected tests", out
+      assert_equal 1, @ran
+      refute_match "warning", err
+      shop.git("checkout", "-q", "lib/cart.rb", "test/system/checkout_test.rb")
+
+      # Recorded with a command that does run it: now it is one of the suite's test files.
+      with_browser = { "BROWSER" => "1" }
+      code, out, err = shop.pitstop("record", "--", Gem.ruby, "bin/rails", "test", "test/cart_test.rb", "test/system/checkout_test.rb", env: with_browser)
+      assert_equal 0, code, out + err
+      shop.edit("test/system/checkout_test.rb", "def test_checks_out", "# the same test\n  def test_checks_out")
+      assert_equal [%w[test/system/checkout_test.rb], []], shop.selection.values_at("files", "left_out")
+      code, out, err = shop.pitstop("run", env: with_browser)
+      assert_equal 0, code, out + err
+      assert_match "plus 1 from whole test files", out
+    end
+  end
+
   # A test of a test helper builds a test class and runs it inside itself. The inner test isn't
   # one Minitest schedules: it's part of the outer test, when recording and when running.
   def test_a_test_run_inside_another_test_belongs_to_it
