@@ -3,6 +3,7 @@
 require "json"
 require "open3"
 require "zlib"
+require "set"
 require "etc"
 require "time"
 require "tempfile"

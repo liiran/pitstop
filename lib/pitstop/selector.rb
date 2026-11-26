@@ -1,4 +1,5 @@
 require "set"
+require_relative "watch"
 require_relative "rules"
 require_relative "unit_diff"
 require_relative "git"
@@ -82,8 +83,14 @@ module Pitstop
       when :ignore, :browser then nil
       when :global then run_all(path, "#{verdict.reason}, uncommitted when the map was made")
       when :test then test_file(path, "M")
+      when :ruby
+        # What the map saw isn't in git, so there is nothing to compare the file with: any part of
+        # it may differ, the code that runs on loading included.
+        if path.match?(Watch::UNFOLLOWED) then run_all(path, "uncommitted when the map was made")
+        else load_time(path, "uncommitted when the map was made", "the map saw another version of it")
+        end
       else
-        if @map.covered?(path) || verdict.kind == :ruby
+        if @map.covered?(path)
           note(path, "uncommitted when the map was made: every test that ran it", @map.tests_touching(path))
         else
           run_all(path, "uncommitted when the map was made")
@@ -100,12 +107,15 @@ module Pitstop
 
     def ruby_file(path, status)
       return run_all(path, "loaded before Pitstop started recording, so no test is linked to it") if @map.unseen.include?(path)
-      return note(path, "file deleted: every test that ran it", @map.tests_touching(path)) if status == "D"
-      return note(path, "new file, not run by any recorded test", []) if status == "A"
+      return run_all(path, "Ruby code in a folder the map doesn't follow") if path.match?(Watch::UNFOLLOWED)
+      # Nothing was recorded about a file that didn't exist. It may be loaded with its whole folder,
+      # found by its name, or reopen a class the tests already use.
+      return run_all(path, "new Ruby file: it may be loaded by its name or its folder") if status == "A"
+      return load_time(path, "file deleted", "any test may depend on what it defined") if status == "D"
 
       old = @old_source.(path)
       now = @new_source.(path)
-      return note(path, "file changed: every test that ran it", @map.tests_touching(path)) if old.nil? || now.nil?
+      return load_time(path, "file changed", "its old or new version can't be read") if old.nil? || now.nil?
 
       UnitDiff.compare(old, now).each { unit_change(path, _1) }
     end
@@ -113,32 +123,50 @@ module Pitstop
     def unit_change(path, change)
       case change.kind
       when :changed, :removed
-        body = change.single_line ? nil : (change.old_lines.begin + 1)..(change.old_lines.end - 1)
-        if body && body.size.positive? && @map.ran_during_boot?(path, body)
-          return run_all(path, "#{change.key} runs while the app boots")
-        end
+        return load_time(path, "#{change.key} #{change.kind}", "a one-line or empty method, so calls to it can't be seen") if change.blind
 
-        tests = @map.tests_touching(path, change.old_lines)
-        if tests.empty? && change.single_line
-          # Ruby's line coverage doesn't see calls to one-line methods like `def x = 1`.
-          return note(path, "#{change.key} #{change.kind} (one-liner: every test that ran the file)", @map.tests_touching(path))
-        end
+        body = (change.old_lines.begin + 1)..change.old_lines.end
+        return run_all(path, "#{change.key} runs while the app boots") if @map.ran_during_boot?(path, body)
 
-        note(path, "#{change.key} #{change.kind}", tests)
-      when :added then note(path, "#{change.key} added (every test that ran the file)", @map.tests_touching(path))
-      when :skeleton then note(path, "code outside methods changed (every test that ran the file)", @map.tests_touching(path))
-      when :unparsable then note(path, "doesn't parse (#{change.key}): every test that ran the file", @map.tests_touching(path))
+        note(path, "#{change.key} #{change.kind}", @map.tests_touching(path, change.old_lines))
+      when :added then load_time(path, "#{change.key} added", "it may replace a method the class already had")
+      when :skeleton then load_time(path, "code outside methods changed", "it runs when the file loads")
+      when :unparsable then load_time(path, "doesn't parse (#{change.key})", "no test can load it")
       end
     end
 
+    # A change to code that runs when its file loads: anything outside a method, a method being
+    # defined, the whole file going. Most files load before the first test, so no test is linked
+    # to that code, yet a test can depend on it without running a line of the file: a constant
+    # read from another file, a `validates`, an inherited method that a new one now replaces.
+    # Which tests those are isn't recorded, so every test runs. The one case that is certain: a
+    # file nothing loaded while the map was recorded can't be changing what those tests do.
+    def load_time(path, what, why)
+      if loaded?(path)
+        run_all(path, "#{what}: #{why}, so any test may depend on it")
+      else
+        note(path, "#{what}, in a file no recorded test loaded", [])
+      end
+    end
+
+    # Every loaded file ran at least one line (its first statement), during a test or before them
+    # all, unless it holds no code, in which case the map can't tell and it counts as loaded.
+    def loaded?(path)
+      return true if @map.covered?(path) || @map.boot.key?(path)
+
+      old = @old_source.(path)
+      !old.nil? && Units.parse(old).empty?
+    end
+
     # Templates and other files Ruby's coverage can see (ERB is compiled to Ruby with its own path).
-    # A new template is only rendered once some code names it, and that code change is picked up
-    # on its own; any other new file (data, settings) may be read by a glob, so it runs everything.
+    # A template only runs when it is rendered, so the tests that rendered it are the ones it can
+    # affect. A new one has no such tests, and Rails picks templates up by name (a layout named
+    # after a controller, a second format of a page), so like any other new file it runs everything.
     def other_file(path, status, verdict)
       if @map.covered?(path)
         note(path, status == "D" ? "file deleted: every test that ran it" : "every test that ran this file", @map.tests_touching(path))
       elsif status == "A" && @rules.other_kind(path) == "template"
-        note(path, "new template, not rendered by any recorded test", [])
+        run_all(path, "new template: it may be picked up by its name alone")
       else
         run_all(path, verdict.reason.sub(" (not followed yet)", ", not seen by any recorded test"))
       end

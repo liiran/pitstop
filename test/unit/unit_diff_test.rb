@@ -46,6 +46,32 @@ class UnitDiffTest < Minitest::Test
     assert_equal 5..7, found.first.old_lines
   end
 
+  # The coverage shows a call as the unit's own lines running. A unit with no line of its own
+  # (everything on the line that opens it, which also runs when the file loads, or nothing in it
+  # at all) can't be linked to the tests that call it.
+  def test_units_whose_calls_the_coverage_cant_see
+    source = <<~RUBY
+      class Cart
+        scope :recent, -> { order(:id) }
+        scope :old, -> do
+          order(:id)
+        end
+        def self.build = new
+        def label; "cart"; end
+        def show
+        end
+        def total
+          items.sum
+        rescue
+          0
+        end
+      end
+    RUBY
+    blind = Pitstop::UnitDiff.compare(source, "class Cart\nend\n").select { _1.kind == :removed }.to_h { [_1.key, _1.blind] }
+    assert_equal({ "Cart scope(:recent) ->" => true, "Cart scope(:old) ->" => false, "Cart.build" => true,
+                   "Cart#label" => true, "Cart#show" => true, "Cart#total" => false }, blind)
+  end
+
   def test_pure_insertion_inside_a_method_is_a_change_to_that_method
     assert_equal [[:changed, "Cart#full?"]], summary(BASE.sub("items.size >= MAX", "return false if items.empty?\n    items.size >= MAX"))
   end

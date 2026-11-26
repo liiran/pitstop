@@ -103,15 +103,19 @@ end
 
 def replay_commits(app)
   rows = replay(app) or return
-  table(["Commit", "What it was", "Pitstop picked", "Whole suite", "With Pitstop"], rows.reverse.map do |r|
+  commits = table(["Commit", "What it was", "Pitstop picked", "Whole suite", "With Pitstop"], rows.reverse.map do |r|
     picked = case r["picked"]
              when "nothing" then r["always"] ? "only the #{r['tests_run']} tests that always run" : "nothing"
-             when "all" then "everything: #{r['why_all'].to_s[0, 60]}"
+             when "all" then "everything: #{r['why_all'].to_s.delete_suffix(', so any test may depend on it')[0, 130]}"
              else "#{count(r['tests_run'])} of #{count(r['tests'])} tests"
              end
     subject = r["subject"].gsub("|", "/").then { _1.size > 64 ? "#{_1[0, 61]}..." : _1 }
     ["`#{r['sha'][0, 7]}`", subject, picked, seconds(r["plain_s"]), seconds(r["run_s"]) + (r["run_measured"] == false ? "*" : "")]
   end)
+  return commits if rows.all? { _1["run_measured"] }
+
+  "#{commits}\n\n\\* Not timed: when Pitstop runs everything, `pitstop run` is the whole suite plus the picking, so " \
+    "that is the time counted (the whole suite's time at that commit, plus the #{seconds(median(rows.map { _1['pick_s'] }))} the picking took)."
 end
 
 # Test-step time per merged pull request: before, every run on the pull request and the one on
@@ -160,14 +164,20 @@ def recording_table
   table(["", "Tests", "Whole suite", "`pitstop record`", "Cost", "Map file"], rows) unless rows.empty?
 end
 
+# Planted bugs, inside methods and outside them. "Caught" means `pitstop run` failed and, where
+# the run checked each failing test (the "failing" count is there), that none was left out.
 def mutants_table
-  rows = NAMES.keys.filter_map do |app|
-    list = lines("#{app}-mutants.jsonl") or next
+  places = { "mutants" => "inside methods", "mutants-outside" => "outside methods" }
+  rows = NAMES.keys.product(places.keys).filter_map do |app, file|
+    list = lines("#{app}-#{file}.jsonl") or next
     catchable = list.reject { _1["caught_by"].start_with?("nothing") }
-    [NAMES[app], list.size, list.size - catchable.size, catchable.size,
-     "#{catchable.count { _1['caught_by'] == 'selection' }} of #{catchable.size}"]
+    tests = list.first.key?("failing") ? "#{catchable.sum { _1['left_out'].size }} of #{count(catchable.sum { _1['failing'] })}" : "not counted"
+    ["#{NAMES[app]}, #{places[file]}", list.size, list.size - catchable.size, catchable.size,
+     "#{catchable.count { _1['caught_by'] == 'selection' }} of #{catchable.size}", tests]
   end
-  table(["", "Bugs planted", "Caught by no test", "Caught by the whole suite", "... of those, caught by `pitstop run`"], rows) unless rows.empty?
+  header = ["Bugs planted", "How many", "Caught by no test", "Caught by the whole suite", "... of those, caught by `pitstop run`",
+            "Failing tests left out"]
+  table(header, rows) unless rows.empty?
 end
 
 blocks = { "recording" => recording_table, "planted-bugs" => mutants_table, "ci" => ci_table, "stale" => stale_table }

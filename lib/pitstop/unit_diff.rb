@@ -5,13 +5,14 @@ module Pitstop
   #
   #   :changed   a unit's tokens differ           → tests that ran its old lines
   #   :removed   a unit is gone                   → tests that ran its old lines
-  #   :added     a new unit (may override one)    → every test that ran the file
-  #   :skeleton  code outside the units changed   → every test that ran the file
-  #   :unparsable  the new file doesn't parse     → every test that ran the file
+  #   :added     a new unit (may override one)    ┐
+  #   :skeleton  code outside the units changed   ├ code that runs when the file loads: the
+  #   :unparsable  the new file doesn't parse     ┘ selector can't narrow these
   #
-  # Old line numbers are what matter: the map was recorded against the old version.
+  # Old line numbers are what matter: the map was recorded against the old version. `blind` says
+  # the coverage can't show which tests called the old unit (Units#blind?).
   class UnitDiff
-    Change = Struct.new(:kind, :key, :old_lines, :single_line, keyword_init: true)
+    Change = Struct.new(:kind, :key, :old_lines, :blind, keyword_init: true)
 
     def self.compare(old_source, new_source) = new(old_source, new_source).changes
 
@@ -29,8 +30,7 @@ module Pitstop
         now = @new[unit.key]
         next if now && now.tokens == unit.tokens
 
-        changes << Change.new(kind: now ? :changed : :removed, key: unit.key, old_lines: unit.lines,
-                              single_line: unit.single_line?)
+        changes << Change.new(kind: now ? :changed : :removed, key: unit.key, old_lines: unit.lines, blind: unit.blind)
       end
       (@new.keys - @old.keys).each { changes << Change.new(kind: :added, key: _1) }
       changes << Change.new(kind: :skeleton) if skeleton_changed?

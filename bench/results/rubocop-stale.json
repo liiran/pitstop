@@ -3,23 +3,23 @@
   "by_map_age": {
     "1": {
       "commits": 8,
-      "ran_everything": 0,
-      "mean_share_of_test_time": 36.9
+      "ran_everything": 7,
+      "mean_share_of_test_time": 89.6
     },
     "2": {
       "commits": 7,
-      "ran_everything": 0,
-      "mean_share_of_test_time": 49.8
+      "ran_everything": 7,
+      "mean_share_of_test_time": 100.0
     },
     "3": {
       "commits": 6,
-      "ran_everything": 0,
-      "mean_share_of_test_time": 55.3
+      "ran_everything": 6,
+      "mean_share_of_test_time": 100.0
     },
     "5": {
       "commits": 4,
-      "ran_everything": 0,
-      "mean_share_of_test_time": 64.2
+      "ran_everything": 4,
+      "mean_share_of_test_time": 100.0
     }
   }
 }

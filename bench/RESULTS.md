@@ -19,24 +19,29 @@ Measured in November 2026, at commits `67305be` (Fizzy), `a97adf3` (RuboCop) and
 
 ## The short version
 
-- **Changing one piece of a Rails app takes seconds instead of twenty.** On Fizzy, a change to
-  one controller action, template, job or model method ran 9 to 205 of the 2,708 tests and took
-  3 to 8 s, where the whole suite takes 20 s.
-- **Over real history, half the test time on Fizzy and 70% on RuboCop.** Replaying Fizzy's last
-  29 commits one by one, `pitstop run` took 5.4 minutes in all where the whole suite each time
-  took 10.5. Twelve of the 29 ran everything; ten of those were library updates. RuboCop's last
-  8 commits took 8.0 minutes where the whole suite took 26.5.
+- **Changing the inside of one method in a Rails app takes seconds instead of twenty.** On Fizzy,
+  a change inside one controller action, template, job or model method ran 9 to 205 of the 2,708
+  tests and took 3 to 8 s, where the whole suite takes 20 s.
+- **Over real history the saving is much smaller: 35% of the test time on Fizzy, 10% on
+  RuboCop.** Replaying Fizzy's last 29 commits one by one, `pitstop run` took 6.8 minutes in all
+  where the whole suite each time took 10.5. RuboCop's last 8 commits took 23.9 minutes where
+  the whole suite took 26.5.
+- **Most real commits run everything, and rightly.** 17 of Fizzy's 29 did: ten library updates,
+  two settings files, and five that changed code which runs when a file loads (a method added,
+  a file added, a line outside any method). 7 of RuboCop's 8 did, because they added a method.
+  A test can depend on such code without running a line of it, so Pitstop doesn't narrow it.
 - **Some suites gain nothing.** Dead Heat's time goes to a few tests that start whole Rails apps.
   A change to nearly any file runs them, and `pitstop run` was a second slower than the whole
   suite.
-- **No planted bug was missed.** Of 40 small bugs planted in Fizzy and 12 in RuboCop, the whole
-  suites catch 36 and 11. The tests Pitstop picked caught every one of those.
+- **No planted bug got through.** 92 small bugs were planted, 52 inside methods and 40 outside
+  them. The whole suites catch 70 of them, and `pitstop run` failed for every one of those. For
+  the 40 outside methods every failing test was checked: 6,761 in all, none left out.
 - **The map costs something.** Recording takes 1.2 to 1.7 times a plain run, and it has to be
-  redone at every merge: on Fizzy, a map five commits old ran everything at 25 of 26 commits.
-- **In CI the recording has to be earned back.** On Fizzy a pull request whose tests run once
-  comes out 16% behind, and ahead from its second run on. On RuboCop the first run already saves.
-- **Measuring this found three bugs in Pitstop**, all fixed
-  (see [Did it miss anything?](#did-it-miss-anything)).
+  redone at every merge: on Fizzy, a map three commits old ran everything at 26 of 28 commits.
+- **In CI the recording has to be earned back.** On Fizzy it takes a pull request's third test
+  run to come out ahead, on RuboCop the fifth.
+- **Measuring this found four bugs in Pitstop**, all fixed. The worst let a failing test be
+  skipped (see [Did it miss anything?](#did-it-miss-anything)).
 
 ## How it was measured
 
@@ -52,7 +57,8 @@ Measured in November 2026, at commits `67305be` (Fizzy), `a97adf3` (RuboCop) and
 - In the tables of single changes, each time is the middle one of three runs (for RuboCop, the
   mean of two).
   In Fizzy's replay each side counts with the best of two or three timings; in RuboCop's, each
-  commit was timed once (the reasons are there).
+  commit was timed once (the reasons are there). A commit where Pitstop runs everything isn't
+  timed twice: `pitstop run` is then the whole suite plus the picking, and that is what's counted.
 - The map is recorded before the timing starts. What recording costs is its own section.
 - The machine is a desktop in everyday use (AMD Ryzen 5 9600X, 6 cores and 12 threads), running
   the projects in Linux containers with an 8 GB memory limit, on Ruby 4.0 (Dead Heat on 3.4).
@@ -71,30 +77,32 @@ Each row is one change made by hand, then undone. The list is in `bench/e2e/<pro
 <!-- changes:fizzy -->
 | What changed | Tests run | Whole suite | With Pitstop | Difference |
 |---|---|---|---|---|
-| Docs only (only the always-run skipped tests) | 6 of 2,708 (0.2%) | 20.2 s | 2.5 s | 8.2× faster |
-| Comment only (the same always-run tests) | 6 of 2,708 (0.2%) | 20.2 s | 2.5 s | 8.1× faster |
-| Planted bug in a lambda scope | 7 of 2,708 (0.3%) | 20.2 s | 2.5 s | 8.1× faster |
-| Controller action | 9 of 2,708 (0.3%) | 20.2 s | 2.9 s | 6.9× faster |
-| Test file | 12 of 2,708 (0.4%) | 20.2 s | 2.6 s | 7.8× faster |
-| Template | 14 of 2,708 (0.5%) | 20.2 s | 3.6 s | 5.6× faster |
-| Job | 20 of 2,708 (0.7%) | 20.2 s | 4.2 s | 4.8× faster |
-| View helper | 120 of 2,708 (4.4%) | 20.2 s | 7.7 s | 2.6× faster |
-| Method, same behaviour | 142 of 2,708 (5.2%) | 20.2 s | 7.4 s | 2.7× faster |
-| Planted bug in a method | 205 of 2,708 (7.6%) | 20.2 s | 7.5 s | 2.7× faster |
-| Constant in the main model | 623 of 2,708 (23%) | 20.2 s | 13.3 s | 1.5× faster |
-| Method nearly every request runs | 1,031 of 2,708 (38%) | 20.2 s | 16.3 s | 1.2× faster |
-| Test settings (runs everything) | 2,708 of 2,708 (100%) | 20.2 s | 21.3 s | the same |
+| Comment only (the same always-run tests) | 6 of 2,708 (0.2%) | 20.3 s | 2.4 s | 8.5× faster |
+| Docs only (only the always-run skipped tests) | 6 of 2,708 (0.2%) | 20.3 s | 2.4 s | 8.4× faster |
+| Controller action | 9 of 2,708 (0.3%) | 20.3 s | 2.8 s | 7.2× faster |
+| Test file | 12 of 2,708 (0.4%) | 20.3 s | 2.6 s | 7.9× faster |
+| Template | 14 of 2,708 (0.5%) | 20.3 s | 3.6 s | 5.6× faster |
+| Job | 20 of 2,708 (0.7%) | 20.3 s | 4.3 s | 4.7× faster |
+| View helper | 120 of 2,708 (4.4%) | 20.3 s | 7.7 s | 2.6× faster |
+| Method, same behaviour | 142 of 2,708 (5.2%) | 20.3 s | 7.6 s | 2.6× faster |
+| Planted bug in a method | 205 of 2,708 (7.6%) | 20.3 s | 7.1 s | 2.8× faster |
+| Method nearly every request runs | 1,031 of 2,708 (38%) | 20.3 s | 16.9 s | 1.2× faster |
+| Constant in the main model | 2,708 of 2,708 (100%) | 20.3 s | 20.7 s | the same |
+| Planted bug in a lambda scope | 2,708 of 2,708 (100%) | 20.3 s | 20.8 s | the same |
+| Test settings (runs everything) | 2,708 of 2,708 (100%) | 20.3 s | 20.9 s | the same |
 <!-- /changes:fizzy -->
 
 How to read it:
 
 - **The floor is about 2.5 s.** That is Rails starting, plus the six tests Fizzy skips, which
   always run. No selection can go below it.
-- **Most changes to one model, controller, job or template run a few dozen tests** and finish in
-  3 to 8 s.
-- **The more of the app a piece of code is part of, the less there is to skip.** A constant in the
-  `Card` model's file runs every test that ran any of that file, 623 of them. A method that runs
-  on nearly every request runs over a thousand.
+- **Most changes inside one method of a model, controller or job, or to a template, run a few
+  dozen tests** and finish in 3 to 8 s.
+- **The more of the app a method is part of, the less there is to skip.** One that runs on nearly
+  every request runs over a thousand tests.
+- **Code that runs when a file loads runs everything.** The constant in the `Card` model and the
+  one-line scope are examples: no test is linked to such code, and any test may depend on it
+  (see [the README](../README.md#code-that-runs-when-a-file-loads)).
 - **A settings file runs everything**, and takes as long as the whole suite, because Pitstop
   can't tell what a setting affects.
 
@@ -132,18 +140,18 @@ How to read it:
 <!-- changes:deadheat -->
 | What changed | Tests run | Whole suite | With Pitstop | Difference |
 |---|---|---|---|---|
-| Docs only | none | 11.8 s | 0.2 s | 74× faster |
-| Comment only | none | 11.8 s | 0.2 s | 66× faster |
-| Planted bug in the verdict | 22 of 95 (23%) | 11.8 s | 13.0 s | 9% slower |
-| Planted bug in a method | 24 of 95 (25%) | 11.8 s | 12.9 s | 9% slower |
-| Method, same behaviour | 37 of 95 (39%) | 11.8 s | 13.2 s | 11% slower |
+| Comment only | none | 11.7 s | 0.2 s | 73× faster |
+| Docs only | none | 11.7 s | 0.2 s | 69× faster |
+| Planted bug in a method | 24 of 95 (25%) | 11.7 s | 12.9 s | 11% slower |
+| Method, same behaviour | 37 of 95 (39%) | 11.7 s | 13.2 s | 13% slower |
+| Planted bug in the verdict | 95 of 95 (100%) | 11.7 s | 11.9 s | the same |
 <!-- /changes:deadheat -->
 
 Dead Heat is here because it gains nothing, and it's worth seeing why. Its suite is short, and
 almost all of its time goes to a few tests that start whole Rails apps. A change to nearly any
 file runs those tests, so the selection has a quarter to two fifths of the tests and over nine
 tenths of the time, and Pitstop's own second of overhead makes the run slightly slower than the
-whole suite.
+whole suite. (The bug planted in the verdict adds a method, which runs everything.)
 A docs or comment change still finishes in a fifth of a second.
 
 ## Real commits
@@ -168,12 +176,12 @@ No settings file was written for either project: this is Pitstop as installed.
 |  | Fizzy |
 |---|---|
 | Commits replayed | 29 (2026-11-09 to 2026-11-20) |
-| Changed nothing a test can be affected by: ran no tests, or only the few that always run | 9 of 29 |
-| Ran some of the tests | 8 of 29, half of them under 1.1% of the tests |
-| Ran everything (a library update, a settings file, a file the map can't follow) | 12 of 29 |
+| Changed nothing a test can be affected by: ran no tests, or only the few that always run | 7 of 29 |
+| Ran some of the tests | 5 of 29, half of them under 1.1% of the tests |
+| Ran everything (a library update, a settings file, a file the map can't follow) | 17 of 29 |
 | Whole suite, every commit | 10.5 min |
-| `pitstop run`, every commit | 5.4 min (49% less) |
-| Average of each commit's time, as a share of the whole suite | 52% |
+| `pitstop run`, every commit | 6.8 min (35% less) |
+| Average of each commit's time, as a share of the whole suite | 66% |
 | Recording, next to a plain run (median) | 1.65× |
 | Tests that started failing at a commit | 0 |
 | ... of those, not picked | 0 |
@@ -181,13 +189,19 @@ No settings file was written for either project: this is Pitstop as installed.
 
 What the 29 commits were:
 
-- **9 changed nothing a test can be affected by** (CI and deploy settings, a pinned tool
+- **7 changed nothing a test can be affected by** (CI and deploy settings, a pinned tool
   version). Pitstop ran Fizzy's six always-run tests, in 2.5 s.
-- **8 changed app code, templates or tests.** Pitstop ran between 9 and 132 tests, in 3 to 7 s.
-- **12 ran everything.** Ten were library updates (`Gemfile.lock`, `Gemfile`). Two edited settings
-  files. For `config/puma.rb` that was the right call: Fizzy has a test that loads it. Tests
-  never load the other, `config/environments/development.rb`, and an `ignore` line in
-  `.pitstop.yml` would let Pitstop skip it, but none was written here.
+- **5 changed the inside of methods, templates or tests.** Pitstop ran between 9 and 132 tests,
+  in 3 to 6 s.
+- **17 ran everything:**
+  - Ten were library updates (`Gemfile.lock`, `Gemfile`).
+  - Two edited settings files. For `config/puma.rb` that was the right call: Fizzy has a test
+    that loads it. Tests never load the other, `config/environments/development.rb`, and an
+    `ignore` line in `.pitstop.yml` would let Pitstop skip it, but none was written here.
+  - Five changed code that runs when a file loads: three added a Ruby file, one added a method,
+    one changed a line outside any method. Two of the three new files sit in a part of the app
+    this build never loads, which Pitstop can't know about a file that didn't exist when the map
+    was made.
 
 A thirtieth commit, Fizzy's move to Ruby 4.0.10, couldn't be replayed, because one container has
 one Ruby. Pitstop runs everything for it (`.ruby-version` changed).
@@ -206,7 +220,7 @@ side counts with its best time.
 | `67305be` | Allow full-mark GC during request handling (#3327) | everything: config/puma.rb: app-wide file | 21.8 s | 21.0 s |
 | `da4fb42` | Bump aws-sdk-s3 from 1.233.2 to 1.242.0 (#3325) | everything: Gemfile.lock: app-wide file | 22.3 s | 21.7 s |
 | `f35c972` | Load the OAuth consent screen in full so Authorize can redire... | 39 of 2,708 tests | 22.1 s | 4.0 s |
-| `9060119` | Log Cloudflare's visitor location as client.geo (#3324) | only the 6 tests that always run | 21.7 s | 2.4 s |
+| `9060119` | Log Cloudflare's visitor location as client.geo (#3324) | everything: saas/lib/fizzy/saas/client_geo_logging.rb: new Ruby file: it may be loaded by its name or its folder | 21.7 s | 21.9 s* |
 | `4da897b` | Pin fizzy-mcp-server v0.2.7 (#3322) | only the 6 tests that always run | 23.3 s | 2.5 s |
 | `be11c24` | Register read and write for a dynamic registration that names... | 132 of 2,708 tests | 21.9 s | 4.0 s |
 | `09c479e` | Bump solid_queue from 1.7.0 to 1.7.2 (#3310) | everything: Gemfile.lock: app-wide file | 20.8 s | 22.1 s |
@@ -222,16 +236,18 @@ side counts with its best time.
 | `caf08dd` | Drop the runner's MySQL server before installing system packa... | only the 6 tests that always run | 21.5 s | 2.5 s |
 | `8e3c3d1` | Upgrade puma to 8.0.3 (#3311) | everything: Gemfile.lock: app-wide file | 20.3 s | 21.4 s |
 | `44d60c1` | Bump msgpack from 1.8.5 to 1.8.7 (#3307) | everything: Gemfile.lock: app-wide file | 25.1 s | 24.0 s |
-| `b08e794` | Merge pull request #3306 from basecamp/harden-webhook-delivery | 129 of 2,706 tests | 21.2 s | 5.9 s |
+| `b08e794` | Merge pull request #3306 from basecamp/harden-webhook-delivery | everything: app/models/webhook.rb: code outside methods changed: it runs when the file loads | 21.2 s | 21.6 s* |
 | `65d432e` | Merge pull request #3302 from basecamp/fix-board-involvement-... | 9 of 2,699 tests | 21.0 s | 3.0 s |
 | `abfc4b4` | Merge pull request #3305 from basecamp/activities-deferred-join | 31 of 2,698 tests | 21.2 s | 4.9 s |
 | `957830c` | Merge pull request #3286 from basecamp/bump-lexxy-1.0.4 | everything: Gemfile: app-wide file | 22.0 s | 22.1 s |
-| `259c624` | Deliver FIZZY_REVIEWER_SIGN_IN_CODES to production (#3282) | only the 6 tests that always run | 21.8 s | 2.6 s |
+| `259c624` | Deliver FIZZY_REVIEWER_SIGN_IN_CODES to production (#3282) | everything: saas/test/lib/production_secrets_test.rb: new Ruby file: it may be loaded by its name or its folder | 21.8 s | 22.0 s* |
 | `381a1d3` | Merge pull request #3299 from basecamp/fix/public-cache-signe... | 25 of 2,696 tests | 21.4 s | 6.0 s |
-| `2de1de3` | Create missing webhook trackers on import (#3294) | 30 of 2,694 tests | 23.0 s | 7.2 s |
-| `3cc736b` | Keep rich text attachments Action Text can't read (#3298) | 18 of 2,693 tests | 20.7 s | 3.0 s |
+| `2de1de3` | Create missing webhook trackers on import (#3294) | everything: app/models/account/import.rb: Account::Import#create_missing_webhook_delinquency_trackers added: it may replace a method the class | 23.0 s | 23.2 s* |
+| `3cc736b` | Keep rich text attachments Action Text can't read (#3298) | everything: lib/rails_ext/action_text_content_unrecognized_attachments.rb: new Ruby file: it may be loaded by its name or its folder | 20.7 s | 20.8 s* |
 | `be713c2` | Pin fizzy-mcp-server v0.2.4 (#3297) | only the 6 tests that always run | 20.1 s | 2.4 s |
 | `ad2106e` | Redesign the OAuth consent, Connected apps and error screens ... | everything: config/environments/development.rb: app-wide file | 20.7 s | 21.2 s |
+
+\* Not timed: when Pitstop runs everything, `pitstop run` is the whole suite plus the picking, so that is the time counted (the whole suite's time at that commit, plus the 0.2 s the picking took).
 <!-- /commits:fizzy -->
 
 </details>
@@ -243,26 +259,29 @@ side counts with its best time.
 |---|---|
 | Commits replayed | 8 (2026-11-20 to 2026-11-21) |
 | Changed nothing a test can be affected by: ran no tests, or only the few that always run | 0 of 8 |
-| Ran some of the tests | 8 of 8, half of them under 1.7% of the tests |
-| Ran everything (a library update, a settings file, a file the map can't follow) | 0 of 8 |
+| Ran some of the tests | 1 of 8, half of them under 1.1% of the tests |
+| Ran everything (a library update, a settings file, a file the map can't follow) | 7 of 8 |
 | Whole suite, every commit | 26.5 min |
-| `pitstop run`, every commit | 8.0 min (70% less) |
-| Average of each commit's time, as a share of the whole suite | 30% |
+| `pitstop run`, every commit | 23.9 min (10% less) |
+| Average of each commit's time, as a share of the whole suite | 90% |
 | Recording, next to a plain run (median) | 1.39× |
 | Tests that started failing at a commit | 0 |
 | ... of those, not picked | 0 |
 <!-- /replay:rubocop -->
 
 All eight commits were small fixes to one or two cops: the cop, its spec, sometimes the
-command-line autocorrect spec, and a changelog entry. Every one ran some of the tests, between
-397 and 1,963 of about 36,400, in 30 to 114 s where the whole suite took 192 to 215 s.
+command-line autocorrect spec, and a changelog entry. Seven of them added a method, usually a
+small helper for the fix, and three of those also changed a line outside any method. A new
+method may replace one the class inherited, and Pitstop can't tell a new helper from that, so
+those seven ran everything. The eighth ran 397 tests in 31 s.
 
 Three things to keep in mind:
 
-- **It is a kind history.** Eight commits with no library update and no settings change among
-  them, so none ran everything. Over a longer stretch some would.
-- **Each commit was timed once.** One process is disturbed far less by other programs than
-  Fizzy's twelve, but the whole suite's time still moved by a tenth between commits.
+- **This is what a cautious rule costs on a project of small fixes.** Most fixes add a helper
+  method. Telling a new helper from a method that replaces an inherited one is the single change
+  that would most improve this number.
+- **Each commit was timed once**, and the seven that ran everything weren't timed again: their
+  time is the whole suite's.
 - **Every one of these commits added a changelog entry**, which one of RuboCop's specs checks and
   Pitstop doesn't follow (see [What can still be missed](#did-it-miss-anything)).
 
@@ -272,14 +291,16 @@ Three things to keep in mind:
 <!-- commits:rubocop -->
 | Commit | What it was | Pitstop picked | Whole suite | With Pitstop |
 |---|---|---|---|---|
-| `a97adf3` | Merge pull request #16403 from Starlexxx/fix_style_for_with_a... | 500 of 36,505 tests | 197 s | 32.6 s |
+| `a97adf3` | Merge pull request #16403 from Starlexxx/fix_style_for_with_a... | everything: lib/rubocop/cop/correctors/for_to_each_corrector.rb: RuboCop::Cop::ForToEachCorrector#block_parameters added: it may replace a met | 197 s | 197 s* |
 | `a8a8762` | Merge pull request #16471 from koic/fix_an_incorrect_autocorr... | 397 of 36,481 tests | 192 s | 30.7 s |
-| `628648d` | Merge pull request #16470 from koic/fix_an_incorrect_autocorr... | 618 of 36,461 tests | 201 s | 60.2 s |
-| `6effb6f` | Merge pull request #16469 from koic/fix_an_incorrect_autocorr... | 587 of 36,437 tests | 196 s | 42.2 s |
-| `104e347` | Merge pull request #16468 from koic/fix_an_incorrect_autocorr... | 1,344 of 36,396 tests | 200 s | 81.1 s |
-| `5c1bba5` | Merge pull request #16425 from koic/fix_an_incorrect_autocorr... | 447 of 36,348 tests | 192 s | 30.4 s |
-| `8e01ebf` | Merge pull request #16416 from koic/fix_an_incorrect_autocorr... | 1,963 of 36,326 tests | 215 s | 114 s |
-| `bfac040` | Merge pull request #16415 from koic/fix_an_incorrect_autocorr... | 840 of 36,284 tests | 196 s | 88.9 s |
+| `628648d` | Merge pull request #16470 from koic/fix_an_incorrect_autocorr... | everything: lib/rubocop/cop/style/raise_args.rb: RuboCop::Cop::Style::RaiseArgs.autocorrect_incompatible_with added: it may replace a method t | 201 s | 202 s* |
+| `6effb6f` | Merge pull request #16469 from koic/fix_an_incorrect_autocorr... | everything: lib/rubocop/cop/style/redundant_initialize.rb: RuboCop::Cop::Style::RedundantInitialize#removal_range added: it may replace a meth | 196 s | 196 s* |
+| `104e347` | Merge pull request #16468 from koic/fix_an_incorrect_autocorr... | everything: lib/rubocop/cop/style/data_inheritance.rb: RuboCop::Cop::Style::DataInheritance#end_line_kept? added: it may replace a method the  | 200 s | 200 s* |
+| `5c1bba5` | Merge pull request #16425 from koic/fix_an_incorrect_autocorr... | everything: lib/rubocop/cop/lint/non_atomic_file_operation.rb: RuboCop::Cop::Lint::NonAtomicFileOperation#condition_range added: it may replac | 192 s | 193 s* |
+| `8e01ebf` | Merge pull request #16416 from koic/fix_an_incorrect_autocorr... | everything: lib/rubocop/cop/lint/useless_assignment.rb: RuboCop::Cop::Lint::UselessAssignment.autocorrect_incompatible_with added: it may repl | 215 s | 215 s* |
+| `bfac040` | Merge pull request #16415 from koic/fix_an_incorrect_autocorr... | everything: lib/rubocop/cop/style/multiline_ternary_operator.rb: RuboCop::Cop::Style::MultilineTernaryOperator#heredoc_body_outside_branch? ad | 196 s | 197 s* |
+
+\* Not timed: when Pitstop runs everything, `pitstop run` is the whole suite plus the picking, so that is the time counted (the whole suite's time at that commit, plus the 0.4 s the picking took).
 <!-- /commits:rubocop -->
 
 </details>
@@ -292,9 +313,9 @@ test. That is slower than a plain run:
 <!-- recording -->
 |  | Tests | Whole suite | `pitstop record` | Cost | Map file |
 |---|---|---|---|---|---|
-| Fizzy | 2,708 | 20.2 s | 33.9 s | 1.67× | 211 KB |
+| Fizzy | 2,708 | 20.3 s | 33.9 s | 1.67× | 209 KB |
 | RuboCop | 36,505 | 196 s | 271 s | 1.38× | 3,318 KB |
-| Dead Heat | 95 | 11.8 s | 14.7 s | 1.24× | 10 KB |
+| Dead Heat | 95 | 11.7 s | 14.6 s | 1.25× | 10 KB |
 <!-- /recording -->
 
 - **Between 1.2 and 1.7 times a plain run.**
@@ -330,20 +351,19 @@ recording costs time. With the averages from the replays above:
 <!-- ci -->
 | Test runs on a pull request before it merges | Fizzy | RuboCop |
 |---|---|---|
-| 1 | 43.3 s → 50.0 s (16% more) | 6.6 min → 5.5 min (16% less) |
-| 2 | 64.9 s → 61.1 s (6% less) | 9.9 min → 6.5 min (34% less) |
-| 3 | 86.6 s → 72.2 s (17% less) | 13.3 min → 7.5 min (43% less) |
-| 5 | 2.2 min → 1.6 min (27% less) | 19.9 min → 9.5 min (52% less) |
-| 10 | 4.0 min → 2.5 min (37% less) | 36.4 min → 14.5 min (60% less) |
+| 1 | 43.3 s → 53.1 s (23% more) | 6.6 min → 7.5 min (14% more) |
+| 2 | 64.9 s → 67.2 s (3% more) | 9.9 min → 10.5 min (6% more) |
+| 3 | 86.6 s → 81.3 s (6% less) | 13.3 min → 13.5 min (2% more) |
+| 5 | 2.2 min → 1.8 min (16% less) | 19.9 min → 19.4 min (2% less) |
+| 10 | 4.0 min → 3.0 min (24% less) | 36.4 min → 34.4 min (6% less) |
 <!-- /ci -->
 
 How to read it: the first number is the test time one merged pull request costs today (each of
 its runs, plus the run on the main branch), the second is the same with Pitstop.
 
-- **On Fizzy, a pull request whose tests run once comes out behind:** the recording costs more
-  than that one run saves. From the second run on it is ahead.
-- **On RuboCop it is ahead from the first run**, because its selections save more and its
-  recording costs less.
+- **A pull request whose tests run once or twice comes out behind:** the recording costs more
+  than those runs save.
+- **Fizzy is ahead from the third run, RuboCop from the fifth.**
 - **The more often a pull request is pushed to, the closer the saving gets** to what the replay
   showed.
 - The recording was timed once per commit, in busy stretches too, while the other two times are
@@ -363,20 +383,17 @@ about.)
 <!-- stale -->
 | The map is from | Fizzy: ran everything at | Fizzy: test time picked, on average | RuboCop: ran everything at | RuboCop: test time picked, on average |
 |---|---|---|---|---|
-| the commit before (recorded at every commit) | 13 of 30 commits | 44% | 0 of 8 commits | 37% |
-| 2 commits before | 18 of 29 commits | 63% | 0 of 7 commits | 50% |
-| 3 commits before | 21 of 28 commits | 76% | 0 of 6 commits | 55% |
-| 5 commits before | 25 of 26 commits | 97% | 0 of 4 commits | 64% |
+| the commit before (recorded at every commit) | 18 of 30 commits | 61% | 7 of 8 commits | 90% |
+| 2 commits before | 25 of 29 commits | 86% | 7 of 7 commits | 100% |
+| 3 commits before | 26 of 28 commits | 93% | 6 of 6 commits | 100% |
+| 5 commits before | 26 of 26 commits | 100% | 4 of 4 commits | 100% |
 | 10 commits before | 21 of 21 commits | 100% | - | - |
 <!-- /stale -->
 
-On Fizzy the map goes stale fast. Every few commits there is a library update, and one of those
-anywhere between the recording and the pull request runs everything. A map from three commits
-back ran everything at 21 of 28 commits, and from five back at 25 of 26. For a project like
-that, record at every merge or the map is worth little.
-
-RuboCop's recent commits each change a cop, so an older map only adds the tests of the commits
-in between: 37% of the test time with a fresh map, 64% with one five commits old.
+The map goes stale fast. A commit that runs everything, anywhere between the recording and the
+pull request, runs everything for the pull request too. On Fizzy a map from two commits back
+ran everything at 25 of 29 commits; on RuboCop at all of them. Record at every merge, or the
+map is worth little.
 
 **4. Picking is not the cost.** Reading the map and deciding what to run took 0.2 s on Fizzy and
 0.4 s on RuboCop's 36,505-test map.
@@ -385,28 +402,40 @@ in between: 37% of the test time with a fresh map, 64% with one five commits old
 
 Speed is only worth having if a failing test is never skipped. Three checks:
 
-**Planted bugs.** Small bugs (`==` for `!=`, `&&` for `||`, `if` for `unless`, `true` for `false`
-and the like) were planted one at a time, each in a different method, on a line some test runs.
-For each one, `pitstop run` ran first. If it passed, the whole suite ran, to see whether any test
-catches the bug at all.
+**Planted bugs.** Small bugs were planted one at a time, on a line that ran while the map was
+recorded, and `pitstop run` was run for each:
+
+- **Inside methods:** `==` for `!=`, `&&` for `||`, `if` for `unless`, `true` for `false` and
+  the like, each in a different method. If `pitstop run` passed, the whole suite ran, to see
+  whether any test catches the bug at all.
+- **Outside methods**, in code that runs when a file loads: a constant's value changed, a
+  setting flipped (`presence: true`), a line taken out (`validates ...`, `include ...`,
+  `before_action ...`). Here the whole suite ran every time, and every test it failed had to be
+  among the ones `pitstop run` picked. A run that fails thanks to one picked test while another
+  failing test was left out doesn't count as caught.
 
 <!-- planted-bugs -->
-|  | Bugs planted | Caught by no test | Caught by the whole suite | ... of those, caught by `pitstop run` |
-|---|---|---|---|---|
-| Fizzy | 40 | 4 | 36 | 36 of 36 |
-| RuboCop | 12 | 1 | 11 | 11 of 11 |
+| Bugs planted | How many | Caught by no test | Caught by the whole suite | ... of those, caught by `pitstop run` | Failing tests left out |
+|---|---|---|---|---|---|
+| Fizzy, inside methods | 40 | 4 | 36 | 36 of 36 | not counted |
+| Fizzy, outside methods | 40 | 17 | 23 | 23 of 23 | 0 of 6,761 |
+| RuboCop, inside methods | 12 | 1 | 11 | 11 of 11 | not counted |
 <!-- /planted-bugs -->
 
-Of 40 bugs planted in Fizzy, the whole suite catches 36, and the tests Pitstop picked caught all
-36. It picked between 7 and 801 of the 2,708 tests, and for two bugs it ran everything. 23 of
-the 36 showed up as a failing run within 5 seconds, and 32 within 10, against 20 seconds for the
-whole suite. One bug made a test hang; the run's ten-minute limit counted that as a failure.
+Inside methods: of 40 bugs planted in Fizzy, the whole suite catches 36, and the tests Pitstop
+picked caught all 36. It picked between 7 and 801 of the 2,708 tests, and for two bugs it ran
+everything. 23 of the 36 showed up as a failing run within 5 seconds, and 32 within 10, against
+20 seconds for the whole suite. One bug made a test hang; the run's ten-minute limit counted
+that as a failure. Of 12 planted in RuboCop, the whole suite catches 11, and the picked tests
+caught all 11. (These two rows were measured before the fix below, which only makes Pitstop
+pick more.)
 
-Of 12 planted in RuboCop, the whole suite catches 11, and the picked tests caught all 11. It
-picked between 51 and 1,597 tests, and 33,678 for a bug in the class every cop is built on.
+Outside methods: of 40 planted in Fizzy, the whole suite catches 23. Pitstop ran everything for
+each, so all 23 were caught and none of the 6,761 tests they broke was left out. Before the
+fix, the same 40 got at least one bug past `pitstop run` entirely.
 
-The five bugs no test catches are gaps in the projects' own tests. The whole suite passes with
-them too, so they say nothing about Pitstop.
+The bugs no test catches are gaps in the projects' own tests. The whole suite passes with them
+too, so they say nothing about Pitstop.
 
 **Real commits.** Every replayed commit was also run whole, so a test that started failing at a
 commit and wasn't picked would have shown up. None did, but that says little: no test started
@@ -416,9 +445,17 @@ planted bugs are the check that counts.
 **Every run checks itself.** `pitstop run` counts the tests that ran against the tests it picked
 and fails if any is missing.
 
-**Three bugs in Pitstop turned up while this page was being measured**, all fixed, each with a
+**Four bugs in Pitstop turned up while this page was being measured**, all fixed, each with a
 test:
 
+- **A failing test could be skipped.** A change outside any method (a constant, a `validates`)
+  picked "every test that ran the file". That code runs when the file loads, before the tests,
+  so a test that depends on it needn't have run a line of the file: a constant in one file read
+  by a method in another picked no test at all, and `pitstop run` passed while the whole suite
+  failed. An added method, a new Ruby file and a one-line method had the same hole. They all run
+  everything now. (pytest-testmon has the same gap: its
+  [issue 191](https://github.com/tarpas/pytest-testmon/issues/191), which its maintainer calls
+  "quite a fundamental limitation".)
 - Fizzy has two test files that open the same test class. Pitstop filed one of their tests under
   the wrong file, and a run stopped with "1 selected test didn't run". The check above did its
   job: the run failed instead of passing with a test missing.
@@ -498,6 +535,11 @@ docker run --rm --memory=8g -e OUT=/pitstop/bench/results/fizzy-replay.jsonl -e 
 # 40 planted bugs
 docker run --rm --memory=8g -e OUT=/pitstop/bench/results/fizzy-mutants.jsonl \
   -v "$PWD:/pitstop" -v pitstop_bundle4:/usr/local/bundle pitstop-dev4 sh /pitstop/bench/e2e/fizzy.sh mutants 40
+
+# 40 bugs planted outside methods, with every failing test checked (add -e WHERE=outside to the line above)
+
+# after a change to what Pitstop picks: ask it again at each replayed commit (no tests run)
+ruby bench/e2e/reselect.rb bench/apps/fizzy bench/out/maps/fizzy bench/results/fizzy-replay.jsonl --save
 
 # what older maps would pick (no tests run, no container needed)
 ruby bench/e2e/stale.rb bench/apps/fizzy bench/out/maps/fizzy bench/results/fizzy-replay.jsonl bench/results/fizzy-stale.json

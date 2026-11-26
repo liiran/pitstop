@@ -38,11 +38,11 @@ class SelectorTest < Minitest::Test
     )
   end
 
-  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [])
+  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART })
     changes = changes.map { |status, path, old| Pitstop::Git::Change.new(status:, path:, old_path: old) }
     Pitstop::Selector.new(
       map: map(dirty:), changes:,
-      old_source: ->(path) { path == "app/models/cart.rb" ? CART : nil },
+      old_source: ->(path) { before[path] },
       new_source: ->(path) { now[path] }
     ).select
   end
@@ -69,14 +69,63 @@ class SelectorTest < Minitest::Test
     assert_equal [3], s.tests.to_a
   end
 
-  def test_a_skeleton_change_selects_every_test_that_ran_the_file
+  # A constant, a `validates`, an `include`: code outside methods runs when the file loads, before
+  # the tests, so no test is linked to it. A test can depend on it without running a line of the
+  # file (another file's method reads the constant), so narrowing to "the tests that ran the file"
+  # would skip that test.
+  def test_a_change_outside_methods_runs_everything
     s = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub("MAX = 3", "MAX = 4") })
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(s)
+    assert s.all?
+    assert_equal "app/models/cart.rb: code outside methods changed: it runs when the file loads, so any test may depend on it", s.run_all
   end
 
-  def test_a_one_liner_no_test_was_seen_running_falls_back_to_the_file
+  # `def label = "cart"` is on one line: that line runs when the file loads, and a call to it adds
+  # nothing the coverage can tell apart. The same goes for a method with nothing in it, which is
+  # what a Rails action that only renders looks like.
+  def test_a_method_whose_calls_cant_be_seen_runs_everything
     s = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub('"cart"', '"basket"') })
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(s)
+    assert s.all?
+    assert_match "Cart#label changed: a one-line or empty method, so calls to it can't be seen", s.run_all
+
+    empty = "class CartsController\n  def show\n  end\nend\n"
+    path = "app/controllers/carts_controller.rb"
+    loaded = map
+    loaded.boot[path] = [[1, 2]]
+    s = Pitstop::Selector.new(
+      map: loaded, changes: [Pitstop::Git::Change.new(status: "M", path:)],
+      old_source: ->(_) { empty }, new_source: ->(_) { empty.sub("  end\nend", "    @cart = Cart.find(1)\n  end\nend") }
+    ).select
+    assert s.all?, "an empty action gets a first line: every test that requests it is affected, and none is linked to it"
+  end
+
+  # The one case that is certain: nothing loaded this file while the map was recorded (it isn't in
+  # the map at all), so nothing in it can be changing what those tests do.
+  def test_a_change_in_a_file_nothing_loaded_picks_nothing
+    path = "saas/lib/billing.rb"
+    was = "module Billing\n  RATE = 3\n\n  def self.due\n    RATE * 2\n  end\nend\n"
+    [was.sub("RATE = 3", "RATE = 4"), was.sub("  def self.due", "  def self.late? = false\n\n  def self.due"), was.sub("RATE * 2", "RATE * 3")].each do |now|
+      s = select([["M", path]], before: { path => was }, now: { path => now })
+      refute s.all?, now
+      assert_empty ids(s)
+    end
+    s = select([["M", path]], before: { path => was }, now: { path => was.sub("RATE = 3", "RATE = 4") })
+    assert_equal "code outside methods changed, in a file no recorded test loaded", s.reasons.first.what
+    refute select([["D", path]], before: { path => was }).all?
+  end
+
+  # A file with no code in it runs no line when it loads, so the map can't say whether it was
+  # loaded. Code appearing in it counts as a change to a loaded file.
+  def test_code_added_to_a_file_that_was_empty_runs_everything
+    path = "app/models/concerns/taggable.rb"
+    s = select([["M", path]], before: { path => "# to be written\n" }, now: { path => "module Taggable\n  LIMIT = 3\nend\n" })
+    assert s.all?
+  end
+
+  # Gems kept inside the project (vendor/) are loaded, but the recorder leaves them out.
+  def test_ruby_code_in_a_folder_the_map_doesnt_follow_runs_everything
+    s = select([["M", "vendor/gems/money/lib/money.rb"]])
+    assert s.all?
+    assert_equal "vendor/gems/money/lib/money.rb: Ruby code in a folder the map doesn't follow", s.run_all
   end
 
   def test_a_method_that_runs_during_boot_runs_everything
@@ -107,15 +156,21 @@ class SelectorTest < Minitest::Test
     assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(s)
   end
 
-  def test_deleted_and_renamed_ruby_files
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(select([["D", "app/models/cart.rb"]]))
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(select([["R", "app/models/basket.rb", "app/models/cart.rb"]]))
+  # What a file defined when it loaded goes with it, and a renamed file is one gone and a new one.
+  def test_deleted_and_renamed_ruby_files_run_everything
+    deleted = select([["D", "app/models/cart.rb"]])
+    assert deleted.all?
+    assert_match "file deleted: any test may depend on what it defined", deleted.run_all
+    assert select([["R", "app/models/basket.rb", "app/models/cart.rb"]]).all?
   end
 
-  def test_files_uncommitted_when_the_map_was_made_take_every_test_that_ran_them
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(select([], dirty: ["app/models/cart.rb"]))
+  # The map saw a version of the file that isn't in git, so there is nothing to compare it with.
+  def test_files_uncommitted_when_the_map_was_made
+    assert select([], dirty: ["app/models/cart.rb"]).all?, "Ruby code: any part may differ, what runs on loading included"
+    assert_equal ["CartsControllerTest#test_show"], ids(select([], dirty: ["app/views/carts/show.html.erb"])), "a template: the tests that rendered it"
     assert select([], dirty: ["Gemfile.lock"]).all?
     assert_empty ids(select([], dirty: ["README.md"]))
+    refute select([], dirty: ["saas/lib/billing.rb"]).all?, "a Ruby file nothing loaded"
   end
 
   def test_a_removed_method_selects_the_tests_that_ran_it
@@ -125,19 +180,32 @@ class SelectorTest < Minitest::Test
     assert_includes s.reasons.map(&:what), "Cart#full? removed"
   end
 
-  def test_an_added_method_or_a_file_that_no_longer_parses_selects_every_test_that_ran_the_file
-    added = CART.sub("  def label", "  def empty? = items.empty?\n\n  def label")
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => added }))
+  # A new method may replace one the class inherits (`def to_param` in a model): tests that
+  # relied on the inherited one needn't have run a line of this file.
+  def test_an_added_method_or_a_file_that_no_longer_parses_runs_everything
+    added = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub("  def label", "  def to_s\n    label\n  end\n\n  def label") })
+    assert added.all?
+    assert_match "Cart#to_s added: it may replace a method the class already had", added.run_all
     broken = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub("def total", "def total(") })
-    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(broken)
-    assert_match(/doesn't parse/, broken.reasons.first.what)
+    assert broken.all?
+    assert_match(/doesn't parse/, broken.run_all)
   end
 
-  def test_new_files
-    assert_empty ids(select([["A", "app/models/coupon.rb"]])), "a new Ruby file is only reached through a change that names it"
-    assert_empty ids(select([["A", "app/views/carts/_coupon.html.erb"]])), "same for a new template"
-    refute select([["A", "app/views/carts/_coupon.html.erb"]]).all?
-    assert select([["A", "app/data/rates.json"]]).all?, "a new data file may be read by a glob"
+  # Nothing was recorded about a file that didn't exist, and a new file can take effect without
+  # any other change naming it: Ruby files loaded with their whole folder or found by their name,
+  # a layout named after a controller, data read with a glob.
+  def test_new_files_run_everything
+    assert_equal "app/models/coupon.rb: new Ruby file: it may be loaded by its name or its folder", select([["A", "app/models/coupon.rb"]]).run_all
+    assert_equal "app/views/layouts/carts.html.erb: new template: it may be picked up by its name alone", select([["A", "app/views/layouts/carts.html.erb"]]).run_all
+    assert select([["A", "app/data/rates.json"]]).all?
+  end
+
+  # A method with code of its own that no test ran, and that didn't run on loading either.
+  def test_a_changed_method_no_test_ran_picks_nothing
+    never_run = CART.sub("  def label = \"cart\"\n", "  def label = \"cart\"\n\n  def discount\n    total / 10\n  end\n")
+    s = select([["M", "app/models/cart.rb"]], before: { "app/models/cart.rb" => never_run }, now: { "app/models/cart.rb" => never_run.sub("/ 10", "/ 5") })
+    refute s.all?
+    assert_empty ids(s)
   end
 
   def test_deleted_files

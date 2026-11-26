@@ -24,31 +24,33 @@ app with 2,708 tests whose whole suite takes 20 seconds:
 
 | You changed | Tests run | Whole suite | `pitstop run` |
 |---|---|---|---|
-| One controller action | 9 | 20.2 s | 2.9 s |
-| One template | 14 | 20.2 s | 3.6 s |
-| One model method | 142 | 20.2 s | 7.4 s |
-| A method nearly every request runs | 1,031 | 20.2 s | 16.3 s |
-| A settings file | all 2,708 | 20.2 s | 21.3 s |
+| The inside of one controller action | 9 | 20.3 s | 2.8 s |
+| One template | 14 | 20.3 s | 3.6 s |
+| The inside of one model method | 142 | 20.3 s | 7.6 s |
+| The inside of a method nearly every request runs | 1,031 | 20.3 s | 16.9 s |
+| A constant, or a settings file | all 2,708 | 20.3 s | 20.7 s |
 
-Real commits are not all small changes, so the saving over a project's history is smaller.
-Replaying Fizzy's last 29 commits one by one, `pitstop run` took 5.4 minutes in all where the
-whole suite each time took 10.5 (49% less): 9 commits changed nothing a test can be affected by,
-8 ran between 9 and 132 tests, and 12 ran everything, 10 of them library updates. Over
-RuboCop's last 8 commits it took 8.0 minutes where the whole suite took 26.5 (70% less).
+Real commits are not all changes inside one method, so the saving over a project's history is
+much smaller. Replaying Fizzy's last 29 commits one by one, `pitstop run` took 6.8 minutes in
+all where the whole suite each time took 10.5 (35% less): 7 commits changed nothing a test can
+be affected by, 5 ran between 9 and 132 tests, and 17 ran everything. Ten of those 17 were
+library updates, and five changed code that runs when a file loads (see
+[below](#code-that-runs-when-a-file-loads)). Over RuboCop's last 8 commits it took 23.9 minutes
+where the whole suite took 26.5 (10% less), because 7 of the 8 added a method.
 
-To check that nothing gets missed, small bugs were planted one at a time: 40 in Fizzy's code and
-12 in RuboCop's. The whole suites caught 36 and 11 of them, and so did the tests Pitstop picked,
-every one.
+To check that nothing gets missed, 92 small bugs were planted one at a time, 52 inside methods
+and 40 outside them. The whole suites caught 70 of them, and `pitstop run` failed for every one
+of those. For the 40 outside methods every failing test was checked, 6,761 in all, and none was
+left out.
 
 What it costs, and where it doesn't help:
 
 - **Recording the map takes 1.2 to 1.7 times a normal run**, and it has to be redone at every
-  merge: on Fizzy, a map five commits old ran everything at 25 of 26 commits.
+  merge: on Fizzy, a map three commits old ran everything at 26 of 28 commits.
 - **A suite whose time goes to a few broad, slow tests gains little.** A small gem whose tests
   start whole Rails apps gained nothing.
-- **In CI the recording on the main branch has to be earned back.** On Fizzy, a pull request
-  whose tests run once came out 16% behind, and ahead from its second run on. On RuboCop the
-  first run already saved.
+- **In CI the recording on the main branch has to be earned back.** On Fizzy a pull request
+  came out ahead from its third test run, on RuboCop from its fifth.
 
 How this was measured, every number, and what the numbers don't show:
 [bench/RESULTS.md](bench/RESULTS.md).
@@ -90,11 +92,11 @@ one). If that commit is missing, Pitstop runs everything and says why.
 
 | You changed | Pitstop runs |
 |---|---|
-| A method or block (`def total`, `scope :recent, -> {…}`) | the tests that ran its old lines |
+| The inside of a method or block (`def total … end`, a `scope` or callback block) | the tests that ran its old lines |
 | A method that runs while the app boots | everything (said why) |
-| Code outside methods (`MAX = 3`, `validates`, `include`), or added a method | every test that ran the file |
+| Code that runs when a file loads (see below) | everything (said why) |
 | A template Ruby's coverage saw (ERB) | every test that rendered it |
-| A deleted or renamed file | every test that ran the old file |
+| A new template | everything (said why) |
 | A test file (changed or new) | that whole file, if the test command runs it (see below) |
 | `Gemfile.lock`, `config/**`, `db/schema.rb`, migrations, test helpers and support files | everything (said why) |
 | Any other file no recorded test read (JSON, YAML…) | everything (said why) |
@@ -103,6 +105,31 @@ one). If that commit is missing, Pitstop runs everything and says why.
 
 Tests that failed or were skipped when the map was made always run: their lines weren't all
 recorded. If the map's commit isn't in your repo, everything runs.
+
+### Code that runs when a file loads
+
+A method's lines run when a test calls it, so the map knows which tests those are. Other code
+runs once, when its file loads, which is before the first test. No test is linked to it, and a
+test can still depend on it:
+
+```ruby
+# lib/limits.rb                      # lib/cart.rb
+module Limits                        def full?
+  MAX = 3                              @items.size >= Limits::MAX
+end                                  end
+```
+
+A test of `Cart#full?` never runs a line of `lib/limits.rb`, and breaks when `MAX` changes.
+So these changes run everything:
+
+- **anything outside a method:** a constant, `validates`, `has_many`, `include`, `private`
+- **a method added**, which may replace one the class inherited
+- **a method that is one line or empty** (`def max = 3`, a Rails action that only renders): its
+  line runs on loading, and a call to it leaves nothing the map could tell apart
+- **a Ruby file added, deleted or renamed**
+
+The exception is a file nothing loaded while the map was recorded: it can't be changing what
+those tests do, so it picks nothing.
 
 Two kinds of test need care, because "docs and browser files run nothing" is wrong for them:
 

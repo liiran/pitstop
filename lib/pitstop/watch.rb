@@ -5,6 +5,10 @@ module Pitstop
   module Watch
     MODULE_NAME = Module.instance_method(:name)
 
+    # Folders inside a project whose Ruby files the map doesn't follow: they hold gems and tooling.
+    # The recorder leaves them out, so a change in one of them can't be narrowed.
+    UNFOLLOWED = %r{\A(vendor|tmp|node_modules|\.bundle|\.pitstop)/}
+
     # Calls `minitest` the moment Minitest::Test is defined, `rspec` (with the runner class) the
     # moment RSpec's runner is, and `simplecov` (with the module) when SimpleCov is. Watching class
     # definitions, rather than wrapping Kernel#require, keeps out of the way of Bootsnap, Zeitwerk

@@ -1,17 +1,17 @@
 {
   "app": "fizzy",
   "commit": "67305bee5",
-  "date": "2026-11-23",
+  "date": "2026-11-26",
   "machine": {
     "cpu": "AMD Ryzen 5 9600X 6-Core Processor",
     "cores": 12,
     "ruby": "ruby 4.0.10 (2026-11-19 revision a704b7cd95) +PRISM [x86_64-linux]",
     "terminal": true,
-    "pitstop": "60c30fe+changes"
+    "pitstop": "6b57a5d+changes"
   },
   "load_average": [
-    1.45,
-    8.69
+    5.47,
+    10.1
   ],
   "command": "(the default)",
   "plain_command": "bin/rails test",
@@ -20,16 +20,16 @@
   "tests": 2708,
   "already_failing": 0,
   "plain_s": [
-    21.8,
+    21.11,
     20.25,
-    20.18
+    20.27
   ],
   "record_s": [
-    33.9,
-    33.88,
-    32.66
+    34.13,
+    33.86,
+    32.7
   ],
-  "map_kb": 211,
+  "map_kb": 209,
   "changes": [
     {
       "label": "docs only (only the always-run skipped tests)",
@@ -37,19 +37,19 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.21,
-        0.19,
-        0.18
+        0.18,
+        0.16,
+        0.17
       ],
       "run_s": [
-        2.53,
-        2.46,
-        2.34
+        2.47,
+        2.41,
+        2.4
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 6,
-      "share_of_test_time": 0.2
+      "share_of_test_time": 0.3
     },
     {
       "label": "comment only (the same always-run tests)",
@@ -58,18 +58,18 @@
       "ok": true,
       "pick_s": [
         0.18,
-        0.18,
-        0.2
+        0.19,
+        0.18
       ],
       "run_s": [
-        2.69,
-        2.42,
-        2.49
+        2.38,
+        2.35,
+        2.41
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 6,
-      "share_of_test_time": 0.2
+      "share_of_test_time": 0.3
     },
     {
       "label": "planted bug in a lambda scope",
@@ -78,18 +78,18 @@
       "ok": true,
       "pick_s": [
         0.18,
-        0.17,
-        0.19
+        0.18,
+        0.18
       ],
       "run_s": [
-        2.53,
-        2.51,
-        2.39
+        21.78,
+        20.69,
+        20.82
       ],
       "outcome": "fail",
-      "run_all": null,
-      "tests_run": 7,
-      "share_of_test_time": 0.2
+      "run_all": "app/models/card/golden.rb: Card::Golden scope(:golden) -> changed: a one-line or empty method, so calls to it can't be seen, so any test may depend on it",
+      "tests_run": 2708,
+      "share_of_test_time": 100.0
     },
     {
       "label": "test file",
@@ -97,14 +97,14 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.17,
         0.18,
-        0.18
+        0.18,
+        0.2
       ],
       "run_s": [
-        2.64,
-        2.51,
-        2.58
+        2.53,
+        2.57,
+        2.65
       ],
       "outcome": "pass",
       "run_all": null,
@@ -118,18 +118,18 @@
       "ok": true,
       "pick_s": [
         0.18,
-        0.16,
-        0.19
+        0.18,
+        0.2
       ],
       "run_s": [
-        3.6,
-        3.77,
-        3.49
+        3.51,
+        3.59,
+        3.65
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 14,
-      "share_of_test_time": 1.2
+      "share_of_test_time": 1.4
     },
     {
       "label": "job",
@@ -137,19 +137,19 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.19,
-        0.19,
-        0.21
+        0.18,
+        0.2,
+        0.19
       ],
       "run_s": [
-        4.24,
-        4.46,
-        4.18
+        4.32,
+        4.17,
+        4.5
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 20,
-      "share_of_test_time": 1.9
+      "share_of_test_time": 2.2
     },
     {
       "label": "controller action",
@@ -158,18 +158,18 @@
       "ok": true,
       "pick_s": [
         0.18,
-        0.17,
-        0.18
+        0.18,
+        0.22
       ],
       "run_s": [
-        2.92,
-        2.86,
-        3.08
+        2.78,
+        2.82,
+        2.85
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 9,
-      "share_of_test_time": 0.5
+      "share_of_test_time": 0.6
     },
     {
       "label": "method, same behaviour",
@@ -177,19 +177,19 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
+        0.18,
         0.17,
-        0.16,
-        0.16
+        0.18
       ],
       "run_s": [
-        7.73,
-        7.37,
-        7.09
+        7.65,
+        7.66,
+        7.42
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 142,
-      "share_of_test_time": 18.8
+      "share_of_test_time": 18.9
     },
     {
       "label": "planted bug in a method",
@@ -197,19 +197,19 @@
       "expected": "fail",
       "ok": true,
       "pick_s": [
-        0.16,
-        0.18,
-        0.22
+        0.19,
+        0.19,
+        0.19
       ],
       "run_s": [
-        7.52,
-        7.04,
-        7.84
+        7.59,
+        7.14,
+        6.83
       ],
       "outcome": "fail",
       "run_all": null,
       "tests_run": 205,
-      "share_of_test_time": 22.6
+      "share_of_test_time": 24.0
     },
     {
       "label": "view helper",
@@ -218,18 +218,18 @@
       "ok": true,
       "pick_s": [
         0.17,
-        0.2,
-        0.17
+        0.17,
+        0.19
       ],
       "run_s": [
-        7.73,
-        8.04,
-        7.62
+        8.27,
+        7.71,
+        7.73
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 120,
-      "share_of_test_time": 20.8
+      "share_of_test_time": 19.5
     },
     {
       "label": "constant in the main model",
@@ -239,17 +239,17 @@
       "pick_s": [
         0.18,
         0.19,
-        0.16
+        0.2
       ],
       "run_s": [
-        13.31,
-        13.69,
-        13.32
+        21.42,
+        20.51,
+        20.7
       ],
       "outcome": "pass",
-      "run_all": null,
-      "tests_run": 623,
-      "share_of_test_time": 58.5
+      "run_all": "app/models/card.rb: code outside methods changed: it runs when the file loads, so any test may depend on it",
+      "tests_run": 2708,
+      "share_of_test_time": 100.0
     },
     {
       "label": "method nearly every request runs",
@@ -257,19 +257,19 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
+        0.18,
         0.19,
-        0.17,
-        0.19
+        0.17
       ],
       "run_s": [
-        16.29,
-        16.96,
-        15.88
+        16.86,
+        15.73,
+        17.27
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 1031,
-      "share_of_test_time": 71.8
+      "share_of_test_time": 67.9
     },
     {
       "label": "test settings (runs everything)",
@@ -277,14 +277,14 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.17,
-        0.19,
-        0.2
+        0.18,
+        0.18,
+        0.18
       ],
       "run_s": [
-        21.89,
-        20.76,
-        21.31
+        20.89,
+        20.93,
+        20.34
       ],
       "outcome": "pass",
       "run_all": "config/environments/test.rb: app-wide file",

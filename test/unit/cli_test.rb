@@ -39,30 +39,70 @@ class CLITest < Minitest::Test
       assert_equal %w[PriceTest#test_format ReceiptTest#test_prints_a_price],
                    try(shop) { shop.edit("lib/price.rb", "cents / 100", "cents.div(100)") }
       assert_equal ["CartTest#test_total"], try(shop) { shop.edit("lib/cart.rb", "@items.sum", "@items.sum(0)") }
-      # A one-line method Ruby's coverage can't see being called: every test that ran the file.
-      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total],
-                   try(shop) { shop.edit("lib/cart.rb", 'def label = "cart"', 'def label = "basket"') }
-      # Code outside methods (a constant): every test that ran the file.
-      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total],
-                   try(shop) { shop.edit("lib/cart.rb", "MAX = 3", "MAX = 4") }
-      # A new method might override one used anywhere in the file's class.
-      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total],
-                   try(shop) { shop.edit("lib/cart.rb", "  def label", "  def empty? = @items.empty?\n\n  def label") }
       # Comments and blank lines change nothing.
       assert_equal [], try(shop) { shop.edit("lib/cart.rb", "  def total\n", "  # The sum.\n\n  def total\n") }
-      # A file that doesn't parse any more: every test that ran it.
-      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total],
-                   try(shop) { shop.edit("lib/cart.rb", "def total", "def total(") }
-      # A new file no recorded test loaded can't break one (a test that loads it changes too).
-      assert_equal [], try(shop) { shop.write("lib/coupon.rb", "class Coupon\nend\n") }
+
+      # Everything below is code that runs when the file loads, before the tests, so no test is
+      # linked to it and any test may depend on it: all of them run.
+      # A one-line method: its line runs on loading, and a call to it adds nothing to tell apart.
+      assert_equal :all, try(shop) { shop.edit("lib/cart.rb", 'def label = "cart"', 'def label = "basket"') }
+      # Code outside methods (a constant).
+      assert_equal :all, try(shop) { shop.edit("lib/cart.rb", "MAX = 3", "MAX = 4") }
+      # A new method, which may replace one the class inherited.
+      assert_equal :all, try(shop) { shop.edit("lib/cart.rb", "  def label", "  def to_s\n    label\n  end\n\n  def label") }
+      # A file that doesn't parse any more.
+      assert_equal :all, try(shop) { shop.edit("lib/cart.rb", "def total", "def total(") }
+      # A new file: it may be loaded with its folder or found by its name.
+      assert_equal :all, try(shop) { shop.write("lib/coupon.rb", "class Coupon\nend\n") }
+    end
+  end
+
+  # The case the rule above exists for. A constant lives in a file of its own, and a method in
+  # another file reads it. The test runs that method and never a line of the constant's file,
+  # which loaded before the tests began. Changing the constant breaks the test.
+  def test_a_constant_read_from_another_file
+    cart = <<~RUBY
+      require "limits"
+      class Cart
+        def initialize(items)
+          @items = items
+        end
+
+        def full?
+          @items.size >= Limits::MAX
+        end
+      end
+    RUBY
+    test = <<~RUBY
+      require_relative "test_helper"
+      require "cart"
+      class CartTest < Minitest::Test
+        def test_full
+          assert Cart.new([1, 2, 3]).full?
+          refute Cart.new([1, 2]).full?
+        end
+      end
+    RUBY
+    Fixture.project("lib/limits.rb" => "module Limits\n  MAX = 3\nend\n", "lib/cart.rb" => cart, "test/test_helper.rb" => Shop::HELPER,
+                    "test/cart_test.rb" => test, "Rakefile" => Shop::RAKEFILE) do |shop|
+      shop.commit
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      refute shop.map["files"].key?("lib/limits.rb"), "no test runs a line of the constant's file"
+
+      shop.edit("lib/limits.rb", "MAX = 3", "MAX = 2") # now a cart of two is full
+      code, out, err = run_tests(shop)
+      assert_match "lib/limits.rb  code outside methods changed: it runs when the file loads, so any test may depend on it  → all tests", out
+      assert_equal 1, code, "the broken test ran and failed:\n#{out}#{err}"
+      assert_match "1 failures", out
     end
   end
 
   def test_deleted_and_renamed_files_and_committed_changes
     Shop.recorded do |shop|
-      assert_equal %w[PriceTest#test_format ReceiptTest#test_prints_a_price], try(shop) { shop.delete("lib/price.rb") }
-      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total],
-                   try(shop) { shop.move("lib/cart.rb", "lib/basket.rb") }
+      # What a file defined when it loaded goes with it; a renamed file is one gone and a new one.
+      assert_equal :all, try(shop) { shop.delete("lib/price.rb") }
+      assert_equal :all, try(shop) { shop.move("lib/cart.rb", "lib/basket.rb") }
       # Changes count the same committed or not: the diff is from the map's commit.
       shop.edit("lib/cart.rb", "@items.size >= MAX", "@items.size > MAX")
       shop.commit("off by one")
@@ -99,7 +139,9 @@ class CLITest < Minitest::Test
     end
   end
 
-  def test_files_uncommitted_when_the_map_was_made_take_every_test_that_ran_them
+  # The map saw a version of the file that isn't in git, so there's nothing to compare it with:
+  # any part of it may differ, the code that runs on loading included.
+  def test_ruby_files_uncommitted_when_the_map_was_made_run_everything
     Fixture.project(Shop::FILES) do |shop|
       shop.commit("start")
       shop.edit("lib/cart.rb", "@items.sum", "@items.sum + 0")
@@ -107,7 +149,7 @@ class CLITest < Minitest::Test
       assert_equal 0, code, err
       assert_equal ["lib/cart.rb"], shop.map["dirty"]
       shop.git("checkout", "-q", "--", "lib/cart.rb") # back to the committed version
-      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total], picked(shop)
+      assert_equal :all, picked(shop)
     end
   end
 

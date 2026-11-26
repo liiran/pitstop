@@ -15,9 +15,9 @@ module Pitstop
   # Each unit and the skeleton get a fingerprint made of their tokens, without comments or
   # whitespace, so a comment-only edit changes nothing.
   class Units
-    Unit = Struct.new(:key, :first_line, :last_line, :start_offset, :end_offset, :tokens) do
+    # `blind`: line coverage can't say which tests called this unit (see #blind?).
+    Unit = Struct.new(:key, :first_line, :last_line, :start_offset, :end_offset, :tokens, :blind) do
       def lines = first_line..last_line
-      def single_line? = first_line == last_line
     end
 
     # Calls whose block is more class body, not a unit of its own.
@@ -47,6 +47,9 @@ module Pitstop
     end
 
     def [](key) = @units.find { _1.key == key }
+
+    # No code at all (only comments or nothing): loading such a file runs no line.
+    def empty? = @error.nil? && @units.empty? && @skeleton.empty?
 
     def keys = @units.map(&:key)
 
@@ -101,7 +104,27 @@ module Pitstop
 
     def add_unit(key, node)
       stop = end_offset(node)
-      @units << Unit.new(key, node.location.start_line, line_at(stop), node.location.start_offset, stop, [])
+      @units << Unit.new(key, node.location.start_line, line_at(stop), node.location.start_offset, stop, [], blind?(node))
+    end
+
+    # A call shows up in the coverage as the unit's own lines being run. That needs the unit to
+    # have code on a line after the one that opens it: the opening line also runs when the file
+    # loads (`def max = 3`, `scope :recent, -> { order(:id) }`), and an empty body runs nothing
+    # (`def show; end`, a Rails action that only renders). Anything that isn't a method or a
+    # block (`class << obj`) is code that runs on loading, not something that gets called.
+    def blind?(node)
+      return true unless node.is_a?(Prism::DefNode) || node.is_a?(Prism::BlockNode) || node.is_a?(Prism::LambdaNode)
+
+      first = first_statement(node.body)
+      first.nil? || first.location.start_line <= node.location.start_line
+    end
+
+    def first_statement(body)
+      case body
+      when Prism::StatementsNode then body.body.first
+      when Prism::BeginNode then first_statement(body.statements)
+      else body
+      end
     end
 
     # Where a node really ends: a heredoc's text sits after the line that opens it, past the

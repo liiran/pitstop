@@ -27,7 +27,7 @@ module Pitstop
     # Lines here belong to gems or tooling, or are test files themselves. A changed test file always
     # runs, so which test ran which line of a test file is never needed, and skipping test files
     # keeps reading coverage cheap on suites with thousands of them.
-    SKIP = %r{\A(vendor|tmp|node_modules|\.bundle|\.pitstop)/|\A(test|spec)/.*_(test|spec)\.rb\z}
+    SKIP = Regexp.union(Watch::UNFOLLOWED, %r{\A(test|spec)/.*_(test|spec)\.rb\z})
     OWN_FILES = "#{File.expand_path('..', __dir__)}/".freeze
 
     # "test" reads coverage after every test. "file" reads it once per test file and gives every
