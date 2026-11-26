@@ -6,15 +6,17 @@ module Pitstop
   # Which lines of which files each test ran, built from the per-process files `pitstop record`
   # writes. Saved as .pitstop/map.json.gz:
   #
-  #   {"version": 1, "commit": "a1b2c3d…", "dirty": ["app/models/cart.rb"],
+  #   {"version": 2, "commit": "a1b2c3d…", "dirty": ["app/models/cart.rb"],
   #    "tests": [["CartTest#test_total", "test/models/cart_test.rb", 4, "pass", 12.5], …],
   #    "boot":  {"app/models/cart.rb": [[1, 4], [9, 9]]},
-  #    "files": {"app/models/cart.rb": [[[[5, 5]], [0, 7, 9]], …]}}
+  #    "files": {"app/models/cart.rb": [[[[5, 5]], [0, 7, 9]], …]},
+  #    "methods": ["==", "total", "to_s", …], "modules": {"Cart": "i", "Price": ""}}
   #
   # Under "files", tests that ran exactly the same lines of a file share one entry: the lines,
   # then the test numbers (positions in "tests"). That keeps big suites' maps small.
+  # "methods" and "modules" are what the recorder noted about names (Record.names!).
   class Map
-    VERSION = 1
+    VERSION = 2
     Test = Struct.new(:index, :id, :file, :line, :status, :ms) do
       def failed? = status != "pass"
     end
@@ -74,13 +76,18 @@ module Pitstop
       end
 
       unseen = by_kind.fetch("boot", []).flat_map { _1["unseen"] || [] }.uniq.sort
-      map = new(
+      # One file per process (fewer when processes had the same code loaded): everything any of
+      # them had counts.
+      names = Dir[File.join(shard_dir, "names-*.json")].sort.map { JSON.parse(File.read(_1)) }
+      map = new({
         "version" => VERSION, "commit" => commit, "dirty" => dirty, "unseen" => unseen,
         "framework" => list.first["framework"],
         "tests" => list.map { [_1["id"], _1["file"], _1["line"], _1["status"], _1["ms"]] },
         "boot" => boot.transform_values { merge_ranges(_1) },
-        "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx.uniq.sort] } }
-      )
+        "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx.uniq.sort] } },
+        "methods" => (names.flat_map { _1["methods"] }.uniq.sort unless names.empty?),
+        "modules" => (names.map { _1["modules"] }.reduce { |all, some| all.merge(some) { |_, a, b| (a + b).chars.uniq.sort.join } } unless names.empty?)
+      }.compact)
       map.check(by_kind)
       map
     end
@@ -160,6 +167,14 @@ module Pitstop
       boot = data["boot"]
       return "its boot lines" unless boot.is_a?(Hash) && boot.all? { |path, ranges| inside?(path) && ranges?(ranges) }
 
+      methods = data["methods"]
+      return "its method names" unless methods.nil? || (methods.is_a?(Array) && methods.all?(String))
+
+      modules = data["modules"]
+      unless modules.nil? || (modules.is_a?(Hash) && modules.all? { |name, marks| name.is_a?(String) && marks.is_a?(String) && marks.match?(/\A[iIcC]*\z/) })
+        return "its classes"
+      end
+
       files = data["files"]
       return "its files" unless files.is_a?(Hash)
 
@@ -202,8 +217,19 @@ module Pitstop
       @boot = data["boot"]
       @files = data["files"]
       @unseen = data["unseen"] || []
+      @methods = data["methods"]&.to_set
+      @modules = data["modules"]
       @warnings = []
     end
+
+    # Did any class or module have a method of this name while the map was recorded: the
+    # project's own, its gems', Ruby's? A recording that kept no names can't say no.
+    def method?(name) = @methods.nil? || @methods.include?(name)
+
+    # What the recorder noted about one of the project's classes or modules, by name: whose of
+    # its methods some code listed ("i" public ones, "I" private ones, "c" and "C" the same for
+    # the class's own methods). nil if it wasn't a class or module of the project then.
+    def module_marks(name) = @modules&.[](name)
 
     # Written beside the map and then moved into place, so a reader never sees half a map, and
     # whatever was at `path` (even a link to another file) is replaced, never written through.

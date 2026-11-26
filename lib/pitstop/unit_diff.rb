@@ -10,9 +10,10 @@ module Pitstop
   #   :unparsable  the new file doesn't parse     ┘ selector can't narrow these
   #
   # Old line numbers are what matter: the map was recorded against the old version. `blind` says
-  # the coverage can't show which tests called the old unit (Units#blind?).
+  # the coverage can't show which tests called the old unit (Units#blind?). An added unit comes
+  # with what the new file says about it (`unit`).
   class UnitDiff
-    Change = Struct.new(:kind, :key, :old_lines, :blind, keyword_init: true)
+    Change = Struct.new(:kind, :key, :old_lines, :blind, :unit, keyword_init: true)
 
     def self.compare(old_source, new_source) = new(old_source, new_source).changes
 
@@ -32,7 +33,7 @@ module Pitstop
 
         changes << Change.new(kind: now ? :changed : :removed, key: unit.key, old_lines: unit.lines, blind: unit.blind)
       end
-      (@new.keys - @old.keys).each { changes << Change.new(kind: :added, key: _1) }
+      (@new.keys - @old.keys).each { changes << Change.new(kind: :added, key: _1, unit: @new[_1]) }
       changes << Change.new(kind: :skeleton) if skeleton_changed?
       changes
     end

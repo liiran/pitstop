@@ -16,6 +16,9 @@
 #   child        lines a subprocess ran for the test that started it
 #   summary      how many tests the framework says it ran, to check none went unrecorded
 #   error        something that makes the map wrong, such as tests running on threads
+#
+# And, as each process ends, .pitstop/runs/<id>/names-<n>.json: the name of every method any class
+# or module has, and the project's classes and modules (see Record.names!).
 require "coverage"
 require_relative "watch"
 
@@ -53,9 +56,19 @@ module Pitstop
     @group = nil
     @shard = nil
     @shard_pid = nil
+    # Ruby's own "list this class's methods", kept before LISTERS below wraps them.
+    LISTING = %i[instance_methods public_instance_methods protected_instance_methods private_instance_methods]
+              .to_h { [_1, Module.instance_method(_1)] }.freeze
+    LISTING_OBJECT = %i[methods public_methods private_methods singleton_methods].to_h { [_1, Kernel.instance_method(_1)] }.freeze
+    ANCESTORS = Module.instance_method(:ancestors)
+    SINGLETON_CLASS = Kernel.instance_method(:singleton_class)
+    CLASS_OF = Kernel.instance_method(:class)
+
     @auto = { tests: 0, take_ms: 0.0, test_ms: 0.0 }
     @lock = Mutex.new
     @recorded = {}
+    @listed = { instance: {}.compare_by_identity, private_instance: {}.compare_by_identity,
+                class_side: {}.compare_by_identity, private_class_side: {}.compare_by_identity }
 
     class << self
       # Coverage since the last read, kept only for project files, as {path => [[first, last], ...]}
@@ -117,6 +130,76 @@ module Pitstop
         seen = {}
         cov = take(seen)
         write(kind: "boot", cov:, unseen: unseen_files(seen))
+      end
+
+      # Some code asked for the list of a class's methods (`side` says which ones). Whatever it
+      # does with the list, it can find a method nobody calls by name: RuboCop runs a cop's
+      # `on_send`, `on_def`... because they show up in `public_instance_methods`.
+      def listed(mod, side)
+        @listed[side][mod] = true
+      end
+
+      # Written by every process as it ends, for `pitstop run` to judge a method that gets added
+      # later. Under a name no class or module had, in a class whose methods nothing lists, no code
+      # could have been calling it; under a name that existed, it may be replacing the method some
+      # test relied on.
+      #
+      #   methods  the name of every method any class or module has (the app's, its gems', Ruby's)
+      #   modules  the project's own classes and modules, each with whose-methods-were-listed
+      #            marks: i its public methods, I its private ones, c and C the same for the
+      #            methods of the class itself (`def self.x`)
+      def names!
+        return if @names_written == Process.pid
+
+        @names_written = Process.pid
+        methods = {}
+        modules = {}
+        ObjectSpace.each_object(Module) do |mod|
+          LISTING[:instance_methods].bind_call(mod, false).each { methods[_1] = true }
+          LISTING[:private_instance_methods].bind_call(mod, false).each { methods[_1] = true }
+          LISTING_OBJECT[:singleton_methods].bind_call(mod, false).each { methods[_1] = true }
+          name = Watch::MODULE_NAME.bind_call(mod)
+          modules[name] = +"" if name && project_module?(name)
+        end
+        mark = ->(mod, letter) { (marks = modules[Watch::MODULE_NAME.bind_call(mod)]) && !marks.include?(letter) && marks << letter }
+        { instance: "i", private_instance: "I" }.each do |side, letter|
+          # A class's list includes what it inherits and what is mixed into it.
+          @listed[side].each_key { |mod| ANCESTORS.bind_call(mod).each { mark.(_1, letter) } }
+        end
+        { class_side: "c", private_class_side: "C" }.each do |side, letter|
+          @listed[side].each_key do |mod|
+            ANCESTORS.bind_call(SINGLETON_CLASS.bind_call(mod)).each do |ancestor|
+              # The class's own methods live in singleton classes (its and its superclasses'); a
+              # module it was extended with contributes its instance methods.
+              if ancestor.singleton_class? then mark.(ancestor.attached_object, letter) if Module === ancestor.attached_object
+              else mark.(ancestor, letter == "c" ? "i" : "I")
+              end
+            end
+          end
+        end
+
+        require "json"
+        require "zlib"
+        require "fileutils"
+        body = JSON.generate(methods: methods.keys.map { _1.to_s.scrub("?") }.sort, modules:)
+        FileUtils.mkdir_p(OUT)
+        path = File.join(OUT, "names-#{methods.size}-#{Zlib.crc32(body)}.json")
+        return if File.exist?(path) # another process with the same code loaded got here first
+
+        File.write("#{path}.#{Process.pid}.tmp", body)
+        File.rename("#{path}.#{Process.pid}.tmp", path)
+      rescue StandardError => e
+        warn "pitstop: couldn't note the method names (#{e.class}: #{e.message.lines.first&.strip})"
+      end
+
+      # Is this class or module defined in one of the project's own files?
+      def project_module?(name)
+        return false unless name.match?(/\A[A-Z]\w*(::[A-Z]\w*)*\z/)
+
+        file = Object.const_source_location(name)&.first
+        !file.nil? && in_project?(file) && !file[PREFIX.size..].match?(Watch::UNFOLLOWED)
+      rescue NameError, ArgumentError
+        false
       end
 
       # Project files Ruby loaded that coverage isn't tracking: they loaded before coverage started
@@ -475,12 +558,41 @@ module Pitstop
         pid
       end
     end
+
+    # Notes who asks for a list of methods, then answers as Ruby would. The methods are replaced
+    # in place, not through a module put in front of Module or Kernel: that would show up in
+    # every class's `ancestors`, which a project's own tests may look at.
+    def self.watch_listing
+      quiet, $VERBOSE = $VERBOSE, nil # replacing a built-in method is meant here
+      { instance_methods: :instance, public_instance_methods: :instance, protected_instance_methods: :instance,
+        private_instance_methods: :private_instance }.each do |name, side|
+        original = LISTING.fetch(name)
+        Module.define_method(name) do |*args|
+          Pitstop::Record.listed(self, side)
+          original.bind_call(self, *args)
+        end
+      end
+      { methods: false, public_methods: false, singleton_methods: false, private_methods: true }.each do |name, private_ones|
+        original = LISTING_OBJECT.fetch(name)
+        Kernel.define_method(name) do |*args|
+          # `Cart.methods` lists the class's own methods, `cart.methods` those of a Cart.
+          if Module === self then Pitstop::Record.listed(self, private_ones ? :private_class_side : :class_side)
+          else Pitstop::Record.listed(CLASS_OF.bind_call(self), private_ones ? :private_instance : :instance)
+          end
+          original.bind_call(self, *args)
+        end
+      end
+    ensure
+      $VERBOSE = quiet
+    end
   end
 end
 
 Coverage.setup(lines: true, eval: true)
 Coverage.resume
 Process.singleton_class.prepend(Pitstop::Record::ForkWatch) if Process.respond_to?(:_fork)
+Pitstop::Record.watch_listing
+at_exit { Pitstop::Record.names! } # registered first, so it runs last, after the tests
 if Pitstop::Record.child?
   # Started from inside a test: everything this process runs belongs to that test.
   at_exit { Pitstop::Record.child_finished }

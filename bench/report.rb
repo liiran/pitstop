@@ -171,7 +171,7 @@ def mutants_table
   rows = NAMES.keys.product(places.keys).filter_map do |app, file|
     list = lines("#{app}-#{file}.jsonl") or next
     catchable = list.reject { _1["caught_by"].start_with?("nothing") }
-    tests = list.first.key?("failing") ? "#{catchable.sum { _1['left_out'].size }} of #{count(catchable.sum { _1['failing'] })}" : "not counted"
+    tests = list.first.key?("failing") ? "#{count(catchable.sum { _1['left_out_count'] || _1['left_out'].size })} of #{count(catchable.sum { _1['failing'] })}" : "not counted"
     ["#{NAMES[app]}, #{places[file]}", list.size, list.size - catchable.size, catchable.size,
      "#{catchable.count { _1['caught_by'] == 'selection' }} of #{catchable.size}", tests]
   end

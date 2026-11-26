@@ -18,12 +18,13 @@ module Pitstop
       def all? = !run_all.nil?
     end
 
-    def initialize(map:, changes:, old_source:, new_source:, rules: Rules.new)
+    def initialize(map:, changes:, old_source:, new_source:, rules: Rules.new, mentioned: ->(_) { true })
       @map = map
       @changes = changes
       @old_source = old_source # ->(path) { content at the map's commit, or nil }
       @new_source = new_source # ->(path) { content now, or nil }
       @rules = rules
+      @mentioned = mentioned # ->(word) { does it appear anywhere in the project at the map's commit? }
     end
 
     def select
@@ -129,10 +130,42 @@ module Pitstop
         return run_all(path, "#{change.key} runs while the app boots") if @map.ran_during_boot?(path, body)
 
         note(path, "#{change.key} #{change.kind}", @map.tests_touching(path, change.old_lines))
-      when :added then load_time(path, "#{change.key} added", "it may replace a method the class already had")
+      when :added then added(path, change)
       when :skeleton then load_time(path, "code outside methods changed", "it runs when the file loads")
       when :unparsable then load_time(path, "doesn't parse (#{change.key})", "no test can load it")
       end
+    end
+
+    # A method that wasn't there before. The danger is one that takes the place of a method the
+    # class already answered to (`def to_param` in a model, `def initialize` in a class that had
+    # none): tests that relied on the old one needn't have run a line of this file, so everything
+    # runs. But most added methods are helpers under a brand-new name, called from code changed
+    # in the same commit. When no class or module had a method of that name, the name appears
+    # nowhere in the project, and nothing lists this class's methods, no existing code could have
+    # been calling it: only the tests that ran the file are picked, as for any change the map
+    # can follow.
+    def added(path, change)
+      reason = not_new(change.unit)
+      return load_time(path, "#{change.key} added", reason) if reason
+
+      note(path, "#{change.key} added under a name nothing used before (every test that ran the file)", @map.tests_touching(path))
+    end
+
+    # Why an added unit can't be treated as a brand-new name, or nil if it can.
+    def not_new(unit)
+      return "it may replace a method the class already had" unless unit&.method
+
+      marks = @map.module_marks(unit.owner)
+      return "it may replace a method, and #{unit.owner} wasn't a class the recording knew" if marks.nil?
+      return "a method of that name already existed, which it may replace" if @map.method?(unit.method)
+
+      listing = unit.class_side ? "c" : "i"
+      if marks.include?(unit.hidden ? listing.upcase : listing)
+        return "code lists the methods of #{unit.owner} and can find it without naming it"
+      end
+      return "its name was already used in the project, by code that may now reach it" if @mentioned.(unit.method)
+
+      nil
     end
 
     # A change to code that runs when its file loads: anything outside a method, a method being

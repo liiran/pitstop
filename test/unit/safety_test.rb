@@ -198,6 +198,10 @@ class SafetyTest < Minitest::Test
         "a file above the project" => good.merge("files" => { "../../etc/x.rb" => [[[[1, 1]], [0]]] }),
         "a test number that doesn't exist" => good.merge("files" => { "lib/cart.rb" => [[[[1, 1]], [99]]] }),
         "lines that aren't numbers" => good.merge("boot" => { "lib/cart.rb" => [["1", "2"]] }),
+        "method names that aren't a list of names" => good.merge("methods" => { "total" => true }),
+        "a method name that isn't text" => good.merge("methods" => ["total", 7]),
+        "classes that aren't a table" => good.merge("modules" => ["Cart"]),
+        "a class with made-up marks" => good.merge("modules" => { "Cart" => "x; rm -rf" }),
         "a list instead of a map" => [1, 2, 3]
       }
       made_up.each do |name, data|

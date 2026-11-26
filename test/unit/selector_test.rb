@@ -30,20 +30,26 @@ class SelectorTest < Minitest::Test
         ["CartsControllerTest#test_show", "test/carts_controller_test.rb", 3, "pass", 9.0],
         ["CartTest#test_broken", "test/cart_test.rb", 11, "fail", 1.0]
       ],
-      "boot" => { "app/models/cart.rb" => [[1, 4], [8, 8], [12, 13]] },
+      "boot" => { "app/models/cart.rb" => [[1, 4], [8, 8], [12, 13]],
+                  "lib/cop.rb" => [[1, 2]], "lib/registry.rb" => [[1, 2]], "lib/pricing.rb" => [[1, 2]] },
       "files" => {
         "app/models/cart.rb" => [[[[5, 5]], [0]], [[[9, 9]], [1]]],
         "app/views/carts/show.html.erb" => [[[[1, 3]], [2]]]
-      }
+      },
+      # Every method name there was, and the project's classes: something lists the public
+      # methods of Cop, and the methods `Registry` itself has (`def self.x`).
+      "methods" => %w[total full? label to_s initialize == on_send],
+      "modules" => { "Cart" => "", "Cop" => "i", "Registry" => "c" }
     )
   end
 
-  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART })
+  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART }, mentioned: [])
     changes = changes.map { |status, path, old| Pitstop::Git::Change.new(status:, path:, old_path: old) }
     Pitstop::Selector.new(
       map: map(dirty:), changes:,
       old_source: ->(path) { before[path] },
-      new_source: ->(path) { now[path] }
+      new_source: ->(path) { now[path] },
+      mentioned: ->(name) { mentioned.include?(name) }
     ).select
   end
 
@@ -180,12 +186,71 @@ class SelectorTest < Minitest::Test
     assert_includes s.reasons.map(&:what), "Cart#full? removed"
   end
 
-  # A new method may replace one the class inherits (`def to_param` in a model): tests that
-  # relied on the inherited one needn't have run a line of this file.
-  def test_an_added_method_or_a_file_that_no_longer_parses_runs_everything
-    added = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub("  def label", "  def to_s\n    label\n  end\n\n  def label") })
+  def with_method(source) = { "app/models/cart.rb" => CART.sub("  def label", "#{source}\n\n  def label") }
+
+  # A new method may replace one the class already answered to (`def to_s`, `def initialize`,
+  # `def to_param` in a model): tests that relied on the old one needn't have run a line of this
+  # file. Some class had a method called `to_s` when the map was recorded, so this may be that.
+  def test_an_added_method_under_a_name_that_already_existed_runs_everything
+    added = select([["M", "app/models/cart.rb"]], now: with_method("  def to_s\n    label\n  end"))
     assert added.all?
-    assert_match "Cart#to_s added: it may replace a method the class already had", added.run_all
+    assert_match "Cart#to_s added: a method of that name already existed, which it may replace", added.run_all
+  end
+
+  # Most added methods are helpers under a name nobody had: no class had such a method, and the
+  # name appears nowhere in the project, so no existing code could have been calling it. What
+  # calls it now is code changed in the same commit, picked for its own change.
+  def test_an_added_method_under_a_name_nothing_used_before_is_narrowed
+    added = select([["M", "app/models/cart.rb"]], now: with_method("  def discount_rate\n    5\n  end"))
+    refute added.all?
+    assert_equal ["CartTest#test_full", "CartTest#test_total"], ids(added)
+    assert_equal "Cart#discount_rate added under a name nothing used before (every test that ran the file)", added.reasons.first.what
+  end
+
+  # The name is new to every class, but some code already says it: a template calling
+  # `cart.discount_rate` behind a `respond_to?`, a `send(:discount_rate)`. It may reach the method now.
+  def test_an_added_method_whose_name_the_project_already_used_runs_everything
+    added = select([["M", "app/models/cart.rb"]], now: with_method("  def discount_rate\n    5\n  end"), mentioned: ["discount_rate"])
+    assert added.all?
+    assert_match "its name was already used in the project", added.run_all
+  end
+
+  # Code that lists a class's methods finds a new one without ever naming it. RuboCop runs a
+  # cop's `on_send`, `on_def`... because they are in the cop's `public_instance_methods`: a new
+  # `on_csend` starts running for every test whose code has a `&.` call. A private helper in the
+  # same class isn't in that list.
+  def test_a_method_added_to_a_class_whose_methods_get_listed
+    cop = "class Cop\n  def on_send(node)\n    check(node)\n  end\n\n  private\n\n  def check(node)\n    node\n  end\nend\n"
+    path = "lib/cop.rb"
+    try = ->(now) { select([["M", path]], before: { path => cop }, now: { path => now }) }
+
+    listed = try.(cop.sub("  private", "  def on_csend(node)\n    check(node)\n  end\n\n  private"))
+    assert listed.all?
+    assert_match "Cop#on_csend added: code lists the methods of Cop and can find it without naming it", listed.run_all
+
+    refute try.(cop.sub("end\nend", "end\n\n  def safe_navigation?(node)\n    node.csend_type?\n  end\nend")).all?,
+           "a private helper isn't among the public methods that get listed"
+
+    registry = "class Registry\n  def self.all\n    @all\n  end\nend\n"
+    with_class_method = select([["M", "lib/registry.rb"]], before: { "lib/registry.rb" => registry },
+                                                           now: { "lib/registry.rb" => registry.sub("end\nend", "end\n\n  def self.enabled_cops\n    @all\n  end\nend") })
+    assert with_class_method.all?, "the same for the class's own methods (`def self.x`), which `Registry.methods` lists"
+  end
+
+  # Nothing can be said about a class the recording didn't know (one defined in a way that leaves
+  # it nameless, or a recording made before names were kept), or about a method put on some other
+  # object (`def config.reset`).
+  def test_an_added_method_the_recording_knows_nothing_about_runs_everything
+    path = "lib/pricing.rb"
+    was = "class Pricing\n  def rate\n    3\n  end\nend\n"
+    unknown = select([["M", path]], before: { path => was }, now: { path => was.sub("end\nend", "end\n\n  def brand_new_helper\n    4\n  end\nend") })
+    assert_match "Pricing wasn't a class the recording knew", unknown.run_all
+
+    on_an_object = select([["M", "app/models/cart.rb"]], now: with_method("  def CONFIG.brand_new_helper\n    4\n  end"))
+    assert_match "it may replace a method the class already had", on_an_object.run_all
+  end
+
+  def test_a_file_that_no_longer_parses_runs_everything
     broken = select([["M", "app/models/cart.rb"]], now: { "app/models/cart.rb" => CART.sub("def total", "def total(") })
     assert broken.all?
     assert_match(/doesn't parse/, broken.run_all)

@@ -201,7 +201,8 @@ chosen.each do |site|
       left_out &= failing.(again)
     end
     row[:failing] = broken ? failing.(full).size : 0
-    row[:left_out] = broken ? left_out.first(20) : []
+    row[:left_out_count] = broken ? left_out.size : 0
+    row[:left_out] = broken ? left_out.first(20) : [] # the first few, by name
     row[:caught_by] = if !broken then failed.(full, full_code) ? "nothing (a flaky failure)" : "nothing"
                       elsif !caught then "whole suite only"
                       elsif left_out.any? then "selection, but not every failing test"
@@ -212,7 +213,7 @@ chosen.each do |site|
   end
   File.write(out_path, JSON.generate(row) + "\n", mode: "a")
   puts "#{row[:path]}:#{row[:line]} #{row[:method]} (#{row[:what]}): picked #{row[:picked]}, #{row[:failing]} failing, " \
-       "caught by #{row[:caught_by]}#{" #{row[:left_out].inspect}" unless row[:left_out].empty?}"
+       "caught by #{row[:caught_by]}#{" (#{row[:left_out_count]} left out, such as #{row[:left_out].first(3).join(', ')})" unless row[:left_out].empty?}"
 end
 
 rows = File.readlines(out_path).map { JSON.parse(_1) }
@@ -220,4 +221,4 @@ catchable = rows.reject { _1["caught_by"].start_with?("nothing") }
 puts "\n#{rows.size} planted bugs: #{catchable.size} caught by the whole suite, " \
      "#{catchable.count { _1['caught_by'] == 'selection' }} of those by Pitstop's selection with every failing test picked, " \
      "#{rows.size - catchable.size} caught by no test. " \
-     "#{catchable.sum { _1['failing'].to_i }} failing tests in all, #{catchable.sum { _1['left_out'].to_a.size }} of them left out."
+     "#{catchable.sum { _1['failing'].to_i }} failing tests in all, #{catchable.sum { _1['left_out_count'] || _1['left_out'].to_a.size }} of them left out."

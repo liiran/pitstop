@@ -57,6 +57,28 @@ class CLITest < Minitest::Test
     end
   end
 
+  # A method added to a class. Under a name that was already a method somewhere, it may be taking
+  # the place of one the tests relied on, and everything runs. Under a name no class had and no
+  # file mentions, nothing could have been calling it: only the tests that ran the file run.
+  def test_an_added_method_is_narrowed_only_under_a_name_nothing_used_before
+    Shop.recorded do |shop|
+      helper = "  def items_over(limit)\n    @items.select { _1 > limit }\n  end\n\n  def label"
+      assert_equal %w[CartTest#test_full CartTest#test_label CartTest#test_total], try(shop) { shop.edit("lib/cart.rb", "  def label", helper) }
+      code, out, = shop.pitstop("list") # nothing changed now
+      assert_equal 0, code, out
+
+      # `to_s` is a method every object already has.
+      assert_equal :all, try(shop) { shop.edit("lib/cart.rb", "  def label", "  def to_s\n    label\n  end\n\n  def label") }
+      # `format` is new to Cart, but Price has a method of that name.
+      assert_equal :all, try(shop) { shop.edit("lib/cart.rb", "  def label", "  def format\n    label\n  end\n\n  def label") }
+
+      shop.edit("lib/cart.rb", "  def label", helper)
+      code, out, = shop.pitstop("list")
+      assert_equal 0, code
+      assert_match "lib/cart.rb  Cart#items_over added under a name nothing used before (every test that ran the file)  → 3 tests", out
+    end
+  end
+
   # The case the rule above exists for. A constant lives in a file of its own, and a method in
   # another file reads it. The test runs that method and never a line of the constant's file,
   # which loaded before the tests began. Changing the constant breaks the test.

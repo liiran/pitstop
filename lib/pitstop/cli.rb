@@ -331,7 +331,8 @@ module Pitstop
       Selector.new(
         map:, changes: git.changes_since(map.commit).reject { _1.path.start_with?(".pitstop/") }, rules: Rules.new(config.reject { _1 == "command" }),
         old_source: ->(path) { git.show(map.commit, path) },
-        new_source: ->(path) { full = File.join(root, path); File.file?(full) ? File.read(full) : nil }
+        new_source: ->(path) { full = File.join(root, path); File.file?(full) ? File.read(full) : nil },
+        mentioned: ->(name) { git.mentioned?(map.commit, name) }
       ).select
     end
 

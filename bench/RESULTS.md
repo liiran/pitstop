@@ -170,6 +170,10 @@ For each commit, oldest first:
 
 No settings file was written for either project: this is Pitstop as installed.
 
+The picks below are from before Pitstop learned to narrow a method added under a name nothing
+used before (see [the README](../README.md#code-that-runs-when-a-file-loads)); with that rule
+some of the commits that added a method run fewer tests. They are being measured again.
+
 ### Fizzy
 
 <!-- replay:fizzy -->
@@ -432,7 +436,7 @@ pick more.)
 
 Outside methods: of 40 planted in Fizzy, the whole suite catches 23. Pitstop ran everything for
 each, so all 23 were caught and none of the 6,761 tests they broke was left out. Before the
-fix, the same 40 got at least one bug past `pitstop run` entirely.
+fix, 6 of those 23 had failing tests left out, and for one of the six `pitstop run` passed.
 
 The bugs no test catches are gaps in the projects' own tests. The whole suite passes with them
 too, so they say nothing about Pitstop.

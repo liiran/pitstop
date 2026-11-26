@@ -28,6 +28,18 @@ module Pitstop
 
     def head = run("rev-parse", "HEAD").strip
 
+    # Does this method name appear, as a word, anywhere in the repository's files as of that
+    # commit? "Don't know" counts as yes: an operator such as `==` can't be searched for as a
+    # word, and Ruby itself has those anyway.
+    def mentioned?(sha, name)
+      check(sha)
+      word = name.sub(/[?!=]\z/, "")
+      return true unless word.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+
+      _, status = Open3.capture2e("git", "-C", @root, "grep", "-q", "-I", "-w", "-F", "-e", word, sha, "--", ":/")
+      status.exitstatus != 1 # 0: found; 1: not found; anything else: git couldn't say
+    end
+
     def commit?(sha)
       return false unless COMMIT.match?(sha.to_s)
 

@@ -76,6 +76,30 @@ class MapTest < Minitest::Test
     refute map.ran_during_boot?("lib/cart.rb", 4..6)
   end
 
+  # Every process leaves the names it had: a class one of them listed the methods of, a method
+  # only a subprocess defined. All of it counts.
+  def test_method_names_and_classes_from_every_process_are_merged
+    map = Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "100.jsonl"), [rec("A#a", cov: RAN), summary(1)].map { JSON.generate(_1) + "\n" }.join)
+      File.write(File.join(dir, "names-3-1.json"), JSON.generate("methods" => %w[total to_s], "modules" => { "Cart" => "", "Cop" => "i" }))
+      File.write(File.join(dir, "names-3-2.json"), JSON.generate("methods" => %w[to_s on_send], "modules" => { "Cart" => "I", "Cop" => "ic" }))
+      Pitstop::Map.build(dir, commit: COMMIT)
+    end
+    assert map.method?("total")
+    assert map.method?("on_send")
+    refute map.method?("brand_new_helper")
+    assert_equal "I", map.module_marks("Cart")
+    assert_equal "ci", map.module_marks("Cop")
+    assert_nil map.module_marks("Unknown")
+  end
+
+  # A recording that kept no names can't say a name is new.
+  def test_without_recorded_names_every_method_name_counts_as_known
+    map = build([rec("A#a", cov: RAN), summary(1)])
+    assert map.method?("brand_new_helper")
+    assert_nil map.module_marks("Cart")
+  end
+
   def test_warns_when_the_framework_ran_more_tests_than_were_recorded
     one = rec("A#a", cov: RAN)
     assert_match "2 of 3 tests ran without being recorded", build([one, summary(3)]).warnings.join

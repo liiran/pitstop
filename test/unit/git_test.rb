@@ -81,6 +81,25 @@ class GitTest < Minitest::Test
 
   # The commit to compare with comes from the map file. Anything but a full commit id is refused
   # before git sees it: git would read a value like "--output=file" as an option.
+  # "Was this method name already written somewhere in the project?", asked of the files as they
+  # were at a commit, whole words only.
+  def test_whether_a_name_appears_anywhere_at_a_commit
+    Fixture.project("lib/cart.rb" => "def discount_rate\n  items.sum\nend\n", "app/views/cart.erb" => "<%= cart.full? %>\n") do |p|
+      p.commit
+      git = Pitstop::Git.new(p.dir)
+      at = git.head
+      p.write("lib/later.rb", "def added_later = 1\n") # not in that commit
+      assert git.mentioned?(at, "discount_rate")
+      assert git.mentioned?(at, "full?"), "a name ending in ? or ! or = is looked up without it"
+      assert git.mentioned?(at, "sum")
+      refute git.mentioned?(at, "discount"), "part of a longer name isn't a mention"
+      refute git.mentioned?(at, "added_later")
+      refute git.mentioned?(at, "nowhere_at_all")
+      assert git.mentioned?(at, "=="), "an operator can't be looked up as a word, and Ruby has them all: yes"
+      assert_raises(Pitstop::Git::Error) { git.mentioned?("--output=x", "sum") }
+    end
+  end
+
   def test_only_a_full_commit_id_reaches_git
     Fixture.project("a.rb" => "a\n") do |p|
       p.commit

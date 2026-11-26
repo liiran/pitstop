@@ -88,6 +88,60 @@ class RecordTest < Minitest::Test
     end
   end
 
+  # For judging a method added later: the name of every method there is, and which of the
+  # project's classes had their methods listed by some code. Listing must go on working exactly
+  # as before, and nothing may show up in a class's ancestors.
+  def test_method_names_and_listed_classes_are_noted
+    files = {
+      "lib/cop.rb" => <<~RUBY,
+        class Cop
+          def self.callbacks = public_instance_methods.grep(/\\Aon_/).sort
+          def on_send = :send
+          def on_def = :def
+
+          private
+
+          def helper = 1
+        end
+
+        class Formatter
+          def self.registered = @registered ||= []
+          def started = nil
+        end
+
+        module Shared
+          def shared_helper = 2
+        end
+
+        class Quiet
+          include Shared
+        end
+      RUBY
+      "test/helper.rb" => "require \"minitest/autorun\"\nrequire_relative \"../lib/cop\"\n",
+      "test/cop_test.rb" => <<~RUBY
+        require_relative "helper"
+        class CopTest < Minitest::Test
+          def test_callbacks_are_found_by_listing
+            assert_equal %i[on_def on_send], Cop.callbacks
+            assert_includes Formatter.methods, :registered
+            assert_equal [Quiet, Shared, Object], Quiet.ancestors.first(3)
+            assert_equal Module, Module.instance_method(:instance_methods).owner
+            assert_equal Kernel, Object.instance_method(:methods).owner
+          end
+        end
+      RUBY
+    }
+    Fixture.project(files) do |project|
+      project.commit
+      code, out, err = project.pitstop("record", "--", Gem.ruby, "-Itest", "-e", "Dir['test/*_test.rb'].each { require File.expand_path(_1) }")
+      assert_equal 0, code, out + err
+      map = project.map
+      %w[on_send helper registered shared_helper puts ==].each { assert_includes map["methods"], _1 }
+      refute_includes map["methods"], "no_such_method_anywhere"
+      assert_equal({ "Cop" => "i", "Formatter" => "c", "Shared" => "", "Quiet" => "" }, map["modules"].slice("Cop", "Formatter", "Shared", "Quiet"))
+    end
+  end
+
   def test_failed_and_skipped_tests_are_marked
     minitest_project("test/odd_test.rb" => <<~RUBY) do |p|
       require_relative "helper"

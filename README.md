@@ -123,13 +123,23 @@ A test of `Cart#full?` never runs a line of `lib/limits.rb`, and breaks when `MA
 So these changes run everything:
 
 - **anything outside a method:** a constant, `validates`, `has_many`, `include`, `private`
-- **a method added**, which may replace one the class inherited
+- **a method added under a name that was already a method somewhere** (`def to_s`,
+  `def initialize`, `def to_param` in a model): it may be replacing the one tests relied on
 - **a method that is one line or empty** (`def max = 3`, a Rails action that only renders): its
   line runs on loading, and a call to it leaves nothing the map could tell apart
 - **a Ruby file added, deleted or renamed**
 
-The exception is a file nothing loaded while the map was recorded: it can't be changing what
-those tests do, so it picks nothing.
+Two exceptions, where Pitstop can be sure:
+
+- **A file nothing loaded while the map was recorded** can't be changing what those tests do.
+  It picks nothing.
+- **A method added under a name nothing used before**, which is what most added methods are: a
+  helper written for the change at hand. The recording keeps the name of every method any class
+  had (the project's, its gems', Ruby's). When the new name is not among them, appears nowhere
+  in the project's files, and belongs to a class whose methods no code lists, nothing could have
+  been calling it. Pitstop picks the tests that ran the file, and the changed code that calls
+  the new method is picked for its own change. The one thing this takes on trust: no code was
+  already reaching for that name by building it (`public_send("on_#{kind}")`).
 
 Two kinds of test need care, because "docs and browser files run nothing" is wrong for them:
 

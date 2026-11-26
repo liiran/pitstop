@@ -72,6 +72,74 @@ class UnitDiffTest < Minitest::Test
                    "Cart#label" => true, "Cart#show" => true, "Cart#total" => false }, blind)
   end
 
+  # An added method comes with its name, its class, which side it is on and whether the file
+  # shows it to be private.
+  def test_an_added_method_says_what_the_file_shows_about_it
+    before = "class Cart\nend\n"
+    after = <<~RUBY
+      class Cart
+        def shown
+          1
+        end
+
+        def self.build
+          new
+        end
+
+        private def tucked_away
+          2
+        end
+
+        def named_later
+          3
+        end
+        private :named_later
+
+        private
+
+        def after_private
+          4
+        end
+
+        public
+
+        def shown_again
+          5
+        end
+
+        class << self
+          def listed
+            6
+          end
+
+          private
+
+          def unlisted
+            7
+          end
+        end
+
+        def self.made_private
+          8
+        end
+        private_class_method :made_private
+
+        def CONFIG.elsewhere
+          9
+        end
+      end
+    RUBY
+    added = Pitstop::UnitDiff.compare(before, after).select { _1.kind == :added }.to_h { [_1.key, _1.unit] }
+    seen = added.transform_values { |unit| unit.method && [unit.owner, unit.class_side ? :class : :instance, unit.hidden ? :private : :public] }
+    assert_equal({
+      "Cart#shown" => ["Cart", :instance, :public], "Cart.build" => ["Cart", :class, :public],
+      "Cart#tucked_away" => ["Cart", :instance, :private], "Cart#named_later" => ["Cart", :instance, :private],
+      "Cart#after_private" => ["Cart", :instance, :private], "Cart#shown_again" => ["Cart", :instance, :public],
+      "Cart.listed" => ["Cart", :class, :public], "Cart.unlisted" => ["Cart", :class, :private],
+      "Cart.made_private" => ["Cart", :class, :private], "Cart.elsewhere" => nil
+    }, seen)
+  end
+
   def test_pure_insertion_inside_a_method_is_a_change_to_that_method
     assert_equal [[:changed, "Cart#full?"]], summary(BASE.sub("items.size >= MAX", "return false if items.empty?\n    items.size >= MAX"))
   end

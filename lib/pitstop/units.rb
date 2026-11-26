@@ -16,7 +16,11 @@ module Pitstop
   # whitespace, so a comment-only edit changes nothing.
   class Units
     # `blind`: line coverage can't say which tests called this unit (see #blind?).
-    Unit = Struct.new(:key, :first_line, :last_line, :start_offset, :end_offset, :tokens, :blind) do
+    # For a method (`def`): `method` is its name, `owner` the class or module it is written in,
+    # `class_side` whether it is the class's own method (`def self.x`), and `hidden` whether it is
+    # private as far as the file shows. A block has no `method`.
+    Unit = Struct.new(:key, :first_line, :last_line, :start_offset, :end_offset, :tokens, :blind,
+                      :method, :owner, :class_side, :hidden) do
       def lines = first_line..last_line
     end
 
@@ -58,22 +62,71 @@ module Pitstop
     def walk(node, scope, singleton, label = nil)
       case node
       when Prism::ClassNode, Prism::ModuleNode
-        walk(node.body, scope + [node.constant_path.slice], false) if node.body
+        walk_body(node.body, scope + [node.constant_path.slice], false) if node.body
       when Prism::SingletonClassNode
         if node.expression.is_a?(Prism::SelfNode)
-          walk(node.body, scope, true) if node.body
+          walk_body(node.body, scope, true) if node.body
         else
           add_unit("#{name(scope)} class << #{node.expression.slice}", node)
         end
       when Prism::DefNode
         separator = node.receiver || singleton ? "." : "#"
-        add_unit("#{name(scope)}#{separator}#{node.name}", node)
+        unit = add_unit("#{name(scope)}#{separator}#{node.name}", node)
+        # `def some_object.x` belongs to that object, whatever it is: not a method of this class.
+        if node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode)
+          unit.method = node.name.to_s
+          unit.owner = name(scope)
+          unit.class_side = !node.receiver.nil? || singleton
+          unit.hidden = false
+        end
       when Prism::CallNode
         walk_call(node, scope, singleton)
       when Prism::BlockNode, Prism::LambdaNode
         add_unit("#{name(scope)} #{label || 'block'}", node)
       else
         node&.compact_child_nodes&.each { walk(_1, scope, singleton, label) }
+      end
+    end
+
+    # A class or module body, one statement after another, to know which methods are private:
+    #
+    #   private              the methods defined after this line, until `public` or `protected`
+    #   private def x        that method
+    #   private :x, :y       those methods (also `private_class_method` for `def self.x`)
+    #
+    # Only what the file shows this plainly counts. Anything else leaves a method public, which is
+    # the cautious answer: a public method is the one more code can find.
+    def walk_body(body, scope, singleton)
+      return walk(body, scope, singleton) unless body.is_a?(Prism::StatementsNode)
+
+      first = @units.size
+      hiding = false
+      named = { false => [], true => [] } # method names made private by name: instance side, class side
+      body.body.each do |statement|
+        if statement.is_a?(Prism::CallNode) && statement.receiver.nil? && statement.block.nil?
+          arguments = statement.arguments&.arguments.to_a
+          case statement.name
+          when :private, :public, :protected
+            next hiding = statement.name == :private if arguments.empty?
+          end
+          if %i[private private_class_method].include?(statement.name)
+            class_side = singleton || statement.name == :private_class_method
+            arguments.each do |argument|
+              case argument
+              when Prism::SymbolNode, Prism::StringNode then named[class_side] << argument.unescaped
+              when Prism::DefNode then named[class_side] << argument.name.to_s
+              when Prism::ArrayNode then named[class_side].concat(argument.elements.grep(Prism::SymbolNode).map(&:unescaped))
+              end
+            end
+          end
+        end
+        count = @units.size
+        walk(statement, scope, singleton)
+        @units[count].hidden = true if hiding && statement.is_a?(Prism::DefNode) && statement.receiver.nil? && @units[count]&.method
+      end
+      owner = name(scope)
+      @units[first..].each do |unit|
+        unit.hidden = true if unit.method && unit.owner == owner && named[unit.class_side].include?(unit.method)
       end
     end
 
@@ -104,7 +157,9 @@ module Pitstop
 
     def add_unit(key, node)
       stop = end_offset(node)
-      @units << Unit.new(key, node.location.start_line, line_at(stop), node.location.start_offset, stop, [], blind?(node))
+      unit = Unit.new(key, node.location.start_line, line_at(stop), node.location.start_offset, stop, [], blind?(node))
+      @units << unit
+      unit
     end
 
     # A call shows up in the coverage as the unit's own lines being run. That needs the unit to

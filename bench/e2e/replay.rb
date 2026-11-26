@@ -21,6 +21,9 @@
 #   MAPS           keep every commit's map in this folder
 #   RETIME         1: time the commits already in the results file once more, from the kept maps
 #   ONLY           with RETIME, only these commits (ids separated by commas)
+#   RECORD_ONLY    1: record the map at the commit before each of the N commits and keep it in
+#                  MAPS, nothing else. For after a change to what the recorder writes: reselect.rb
+#                  then asks Pitstop again from the new maps.
 require "fileutils"
 require_relative "bench"
 
@@ -69,6 +72,25 @@ start = Bench.git("rev-parse", "HEAD")
 commits = Bench.git("rev-list", "--first-parent", "--reverse", "-n", count, tip).lines.map(&:strip)
 done = File.exist?(out_path) ? File.readlines(out_path).map { JSON.parse(_1)["sha"] } : []
 map = nil
+
+if ENV["RECORD_ONLY"] == "1"
+  begin
+    commits.map { Bench.git("rev-parse", "#{_1}^1") }.uniq.each do |sha|
+      next if Dir[File.join(ENV.fetch("MAPS"), "#{sha}*.json.gz")].any?
+
+      checkout(sha)
+      prepare(setup, sha)
+      _, seconds, = record(tail)
+      keep(ENV.fetch("MAPS"), sha)
+      puts "#{sha[0, 9]} recorded in #{seconds}s"
+    rescue Skip => e
+      puts "#{sha[0, 9]} not recorded: #{e.message}"
+    end
+  ensure
+    system("git", "checkout", "-q", "-f", "--detach", start)
+  end
+  exit
+end
 
 # RETIME=1: time the commits already in the results file once more, with the maps kept from the
 # first pass (so nothing is recorded again). A machine that is busy for a moment makes one run
