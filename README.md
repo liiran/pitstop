@@ -101,7 +101,7 @@ one). If that commit is missing, Pitstop runs everything and says why.
 | `Gemfile.lock`, `config/**`, `db/schema.rb`, migrations, test helpers and support files | everything (said why) |
 | Any other file no recorded test read (JSON, YAML…) | everything (said why) |
 | Docs, CI settings, CSS, JavaScript, images | nothing, unless a recorded test read the file or looked for it |
-| A file a test read, or a folder a test listed (see below) | that test and the tests that ran after it |
+| A file a test read, or a folder a test listed (see below) | the tests that read it or listed it |
 | Only comments or blank lines | nothing |
 
 Tests that failed or were skipped when the map was made always run: their lines weren't all
@@ -161,25 +161,43 @@ folders it lists (and with what pattern), and which files it checks for:
 
 | What happened | Pitstop runs |
 |---|---|
-| A file that a test read was changed | that test, and the tests that ran after it in the same process |
-| A file was added, deleted or renamed, and a test had listed its folder (`Dir["changelog/*.md"]`) or checked for it (`File.exist?`) | the same |
+| A file that a test read was changed | the tests that read it |
+| A file was added, deleted or renamed, and a test had listed its folder (`Dir["changelog/*.md"]`) or checked for it (`File.exist?`) | the tests that did |
 | The reading or listing was done by a test file's own code as it loaded (the `Dir[...]` above) | that whole test file, so an example gets made for the new entry |
 | It was done while the app was starting | everything (said why) |
 
-- **Why the tests after it?** What one test read may stay in memory (a constant, a cache) and be
-  used by later tests in that process without opening the file again. Which tests ran later is
-  in the recording. For a file read early in a run, that is a large share of the suite.
-  `tests_after_readers: false` in `.pitstop.yml` turns it off: then only the tests that opened
-  the file run, and a test that uses what an earlier one read is not picked.
-- **For a file whose lines the map already follows** (Ruby, templates), only the tests that read
-  it are added. What stays in memory from such a file is code, and a test that runs that code
-  is linked to it anyway. So a spec that reads your source files as text runs when one changes,
-  even if only a comment did.
+- **A spec that reads your source files as text** runs when one of them changes, even if only
+  a comment did.
 - **This only ever adds tests.** A file no test read is treated as the table at the top says.
 - **Your own `ignore` line wins.** If `.pitstop.yml` ignores a file that tests read, they are
   left out, and the output says so.
 
-What Pitstop can't see, and you list under `global` in `.pitstop.yml`:
+**What this leaves out, and the setting for it.** A test can use what an earlier test read,
+without opening the file itself:
+
+```ruby
+def notes = $notes ||= File.read("docs/notes.md")   # read once, then kept in memory
+
+def test_b = assert_includes(notes, "Setup")        # opens the file: linked to it
+def test_c = assert_includes(notes, "Usage")        # gets the kept text: not linked
+```
+
+Change `docs/notes.md` and Pitstop picks `test_b`. It doesn't pick `test_c`, which nothing in
+the recording ties to the file, though the change can break it. That failure shows up the next
+time everything runs (recording the map is such a run), so it is found late, not never.
+
+`tests_after_readers: true` in `.pitstop.yml` closes this. Then every test that ran after a
+reader in the same process runs too, since any of them may be using what it read:
+
+| | `docs/notes.md` changes | The price |
+|---|---|---|
+| Default | runs `test_b` | `test_c` is left out |
+| `tests_after_readers: true` | runs `test_b`, `test_c` and every other test that ran after `test_b` | most of those tests have nothing to do with the file; for a file read early in a run, it is most of the suite |
+
+The setting never applies to a file whose lines the map follows (Ruby, templates): what stays
+in memory from such a file is code, and a test that runs that code is linked to it anyway.
+
+What Pitstop can't see with either setting, and you list under `global` in `.pitstop.yml`:
 
 - **A file opened by a program that isn't Ruby,** such as a test that runs `git ls-files` or
   `cat`, or by a gem's own C code. A Ruby program that a test starts is followed.
@@ -226,7 +244,7 @@ global: ["app/lib/money.rb"]   # changes here run everything
 
 The lists are `ignore`, `global`, `browser`, `tests`, `test_support` and `ruby`. A change to
 `.pitstop.yml` itself always runs everything, whatever its `ignore` list says.
-`tests_after_readers: false` is the one other setting (see
+`tests_after_readers: true` is the one other setting (see
 [Files a test reads](#files-a-test-reads)).
 
 Your own patterns are checked before the built-in ones, so they can overrule them either way.

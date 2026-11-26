@@ -664,12 +664,25 @@ class CLITest < Minitest::Test
 
   def docs_tests(*letters) = letters.map { |letter| DOCS_TEST[/def (test_#{letter}\w+)/, 1] }.map { "DocsTest##{_1}" }
 
-  def test_a_doc_a_test_reads_runs_that_test_and_the_ones_after_it
+  def test_a_doc_a_test_reads_runs_the_tests_that_read_it
     docs_project do |shop|
       shop.write("docs/guide.md", "a better guide\n")
       assert_empty picked(shop), "no test reads the guide"
 
-      # test_c never opens the file: it uses what test_b read. Both fail with the new text.
+      shop.write("docs/notes.md", "new notes\n")
+      assert_equal docs_tests("b"), picked(shop)
+      code, out, = run_tests(shop)
+      assert_equal 1, code, out
+      assert_match "1 failures", out
+    end
+  end
+
+  # What the default leaves out, and the setting that closes it. test_c never opens the notes:
+  # it uses what test_b read and kept, so nothing links it to the file, and it fails with the new
+  # text too. With `tests_after_readers: true`, every test that ran after a reader runs: test_c,
+  # and also test_d and test_e, which have nothing to do with the notes.
+  def test_with_tests_after_readers_the_tests_that_ran_after_a_reader_run_too
+    docs_project(".pitstop.yml" => "tests_after_readers: true\n") do |shop|
       shop.write("docs/notes.md", "new notes\n")
       assert_equal docs_tests("b", "c", "d", "e"), picked(shop)
       code, out, = run_tests(shop)
@@ -681,11 +694,11 @@ class CLITest < Minitest::Test
   def test_a_file_added_or_removed_runs_the_tests_that_listed_its_folder
     docs_project do |shop|
       shop.write("docs/more.md", "more\n")
-      assert_equal docs_tests("d", "e"), picked(shop)
+      assert_equal docs_tests("d"), picked(shop)
       shop.delete("docs/more.md")
 
       shop.delete("docs/guide.md")
-      assert_equal docs_tests("d", "e"), picked(shop)
+      assert_equal docs_tests("d"), picked(shop)
     end
   end
 
@@ -697,7 +710,7 @@ class CLITest < Minitest::Test
       assert_empty picked(shop)
 
       shop.write("docs/new/1.md", "one\n")
-      assert_equal docs_tests("d", "e"), picked(shop)
+      assert_equal docs_tests("d"), picked(shop)
     end
   end
 
@@ -768,16 +781,6 @@ class CLITest < Minitest::Test
     end
   end
 
-  # The cheaper setting: only the tests that opened the file. test_c, which uses what test_b
-  # read, fails with the new text and is left out. That is what the setting gives up.
-  def test_with_tests_after_readers_off_only_the_readers_run
-    docs_project(".pitstop.yml" => "tests_after_readers: false\n") do |shop|
-      shop.write("docs/notes.md", "new notes\n")
-      assert_equal docs_tests("b"), picked(shop)
-      assert_match(/tests_after_readers/, shop.selection["reasons"].map { _1["what"] }.join("\n"))
-    end
-  end
-
   # Paths as real projects write them: a doubled slash, and a pattern whose choices are whole
   # paths (Rails looks for fixtures with "{/app/test/fixtures/}/users{.yml,/**/*.yml}").
   def test_untidy_paths_and_patterns_with_choices_are_understood
@@ -794,7 +797,7 @@ class CLITest < Minitest::Test
     RUBY
     docs_project("test/docs_test.rb" => test) do |shop|
       shop.delete("docs/notes.md")
-      assert_equal %w[LooksTest#test_b_checks_with_two_slashes LooksTest#test_c_lists_with_choices], picked(shop)
+      assert_equal %w[LooksTest#test_b_checks_with_two_slashes], picked(shop)
       shop.write("docs/notes.md", "notes\n")
 
       shop.write("docs/guide/more.md", "more\n")

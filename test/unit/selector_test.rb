@@ -43,7 +43,7 @@ class SelectorTest < Minitest::Test
     ))
   end
 
-  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART }, mentioned: [], opened: nil, after_readers: true)
+  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART }, mentioned: [], opened: nil, after_readers: false)
     changes = changes.map { |status, path, old| Pitstop::Git::Change.new(status:, path:, old_path: old) }
     Pitstop::Selector.new(
       map: map(dirty:, opened:), changes:,
@@ -314,15 +314,21 @@ class SelectorTest < Minitest::Test
 
   NOTHING_OPENED = { "reads" => {}, "lists" => {}, "boot_reads" => [], "boot_lists" => [], "file_reads" => {}, "file_lists" => {} }.freeze
 
-  def test_the_tests_after_a_reader_count_only_in_its_own_process
+  def test_a_changed_file_adds_the_tests_that_read_it
     s = select([["M", "docs/a.md"]], opened: reading("reads" => { "docs/a.md" => [0] }))
+    assert_equal %w[CartTest#test_total], ids(s)
+  end
+
+  def test_when_asked_for_the_tests_after_a_reader_count_too_but_only_in_its_own_process
+    s = select([["M", "docs/a.md"]], opened: reading("reads" => { "docs/a.md" => [0] }), after_readers: true)
     assert_equal %w[CartTest#test_full CartTest#test_total], ids(s)
   end
 
   # The template's lines are followed: a test that uses what was read from it runs it, and is
-  # linked to it that way. So the reader is added, and not everything that ran after it.
+  # linked to it that way. So the reader is added, and not everything that ran after it, even
+  # when the tests after a reader are asked for.
   def test_a_file_whose_lines_are_followed_adds_its_readers_only
-    s = select([["M", "app/views/carts/show.html.erb"]], opened: reading("reads" => { "app/views/carts/show.html.erb" => [0] }))
+    s = select([["M", "app/views/carts/show.html.erb"]], opened: reading("reads" => { "app/views/carts/show.html.erb" => [0] }), after_readers: true)
     assert_equal %w[CartTest#test_total CartsControllerTest#test_show], ids(s)
   end
 
@@ -348,10 +354,5 @@ class SelectorTest < Minitest::Test
     s = select([["M", "docs/a.md"]], opened: reading("file_reads" => { "test/carts_controller_test.rb" => ["docs/a.md"] }))
     assert_equal ["test/carts_controller_test.rb"], s.files.to_a
     assert_equal %w[CartsControllerTest#test_show], ids(s)
-  end
-
-  def test_with_tests_after_readers_off_the_tests_after_a_reader_are_left_out
-    s = select([["M", "docs/a.md"]], opened: reading("reads" => { "docs/a.md" => [0] }), after_readers: false)
-    assert_equal %w[CartTest#test_total], ids(s)
   end
 end

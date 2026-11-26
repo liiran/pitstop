@@ -19,7 +19,7 @@ module Pitstop
     end
 
     def initialize(map:, changes:, old_source:, new_source:, rules: Rules.new, mentioned: ->(_) { true },
-                   folder_then: ->(_) { false }, folder_now: ->(_) { false }, after_readers: true)
+                   folder_then: ->(_) { false }, folder_now: ->(_) { false }, after_readers: false)
       @map = map
       @changes = changes
       @old_source = old_source # ->(path) { content at the map's commit, or nil }
@@ -80,10 +80,11 @@ module Pitstop
 
       # The tests that read the file are added. What one of them read may be kept in memory (in a
       # constant, a cache) and used by tests that ran after it in the same process without
-      # opening the file again, so those are added too, unless the project turned that off
-      # (`tests_after_readers: false`: for a file read early in a run they are most of the
-      # suite). Never for a file whose lines the map follows: what stays in memory from it is
-      # code, and a test that runs that code is linked to it already.
+      # opening the file again. Those are not linked to the file, and are left out, unless the
+      # project asks for them (`tests_after_readers: true`): then every test that ran after a
+      # reader is added, which for a file read early in a run is most of the suite. Never for a
+      # file whose lines the map follows: what stays in memory from it is code, and a test that
+      # runs that code is linked to it already.
       onward = @after_readers && !@map.covered?(path)
       found = [@map.readers(path, onward:)]
       # Whether the file exists only changed if it was added, deleted or renamed.
@@ -107,10 +108,7 @@ module Pitstop
       files = found.flat_map(&:files).uniq.sort
       @files.merge(files)
       tests = files.reduce(found.map(&:tests).reduce(:|)) { |all, file| all | @map.tests_in_file(file) }
-      scope = if onward then " (those, and the tests that ran after them)"
-              elsif !@after_readers && !@map.covered?(path) then " (those only: `tests_after_readers` is off)"
-              end
-      note(path, "recorded tests #{asked}#{scope}", tests)
+      note(path, "recorded tests #{asked}#{' (those, and the tests that ran after them)' if onward}", tests)
     end
 
     # The folders above a file that weren't there at the map's commit or aren't there now: they

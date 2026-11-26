@@ -335,7 +335,7 @@ module Pitstop
         mentioned: ->(name) { git.mentioned?(map.commit, name) },
         folder_then: ->(folder) { git.folder?(map.commit, folder) },
         folder_now: ->(folder) { File.directory?(File.join(root, folder)) },
-        after_readers: config["tests_after_readers"] != false
+        after_readers: config["tests_after_readers"] == true
       ).select
     end
 
