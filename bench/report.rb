@@ -95,7 +95,7 @@ def replay_summary(app)
     ["Whole suite, every commit", minutes(before)],
     ["`pitstop run`, every commit", "#{minutes(after)} (#{percent(before - after, before)} less)"],
     ["Average of each commit's time, as a share of the whole suite", percent(mean(rows.map { _1["run_s"] / _1["plain_s"] }), 1)],
-    ["Recording, next to a plain run (median)", format("%.2f×", median(rows.map { _1["record_s"] / _1["plain_s"] }))],
+    ["Recording, next to a plain run", format("%.2f×", recording_cost(app) || median(rows.map { _1["record_s"] / _1["plain_s"] }))],
     ["Tests that started failing at a commit", rows.sum { _1["new_failures"].size }.to_s],
     ["... of those, not picked", rows.sum { _1["missed"].size }.to_s]
   ])
@@ -121,13 +121,21 @@ end
 # Test-step time per merged pull request: before, every run on the pull request and the one on
 # the main branch run the whole suite; with Pitstop, the pull request's runs are `pitstop run`
 # and the main branch's is `pitstop record`. Averages over the replayed commits.
+# How many times a plain run `pitstop record` takes, timed with the recorder as it is now (the
+# replayed commits were first recorded with an earlier one).
+def recording_cost(app)
+  data = changes(app) or return
+  median(data["record_s"]) / median(data["plain_s"])
+end
+
 def ci_table
   apps = %w[fizzy rubocop].filter_map { |app| (rows = replay(app)) && [app, rows] }
   return if apps.empty?
 
   rows = [1, 2, 3, 5, 10].map do |runs|
-    [runs.to_s, *apps.map do |_, commits|
-      plain, run, record = %w[plain_s run_s record_s].map { |key| mean(commits.map { _1[key] }) }
+    [runs.to_s, *apps.map do |app, commits|
+      plain, run = %w[plain_s run_s].map { |key| mean(commits.map { _1[key] }) }
+      record = plain * (recording_cost(app) || mean(commits.map { _1["record_s"] / _1["plain_s"] }))
       before = (runs + 1) * plain
       after = runs * run + record
       unit = before >= 120 ? ->(s) { format("%.1f min", s / 60.0) } : method(:seconds)

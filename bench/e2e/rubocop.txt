@@ -1,6 +1,6 @@
 # label | path | text to replace | replacement | expected
-docs only: a changelog entry (only the always-run tests) | changelog/fix_an_example_for_this_check.md | (new file) | * [#1](https://example.com/1): Fix an example. ([@example][])\n | pass
-comment only (the same always-run tests) | lib/rubocop/cop/style/negated_if.rb |         def on_if(node) |         # Checks every if.\n        def on_if(node) | pass
+badly formed changelog entry (the changelog's specs catch it) | changelog/fix_an_example_for_this_check.md | (new file) | * [#1](https://example.com/1): Fix an example. ([@example][])\n | fail
+comment only (the specs that read the file as text) | lib/rubocop/cop/style/negated_if.rb |         def on_if(node) |         # Checks every if.\n        def on_if(node) | pass
 spec file | spec/rubocop/cop/style/negated_if_spec.rb | RSpec.describe | # Same specs.\nRSpec.describe | pass
 method, same behaviour | lib/rubocop/cop/style/negated_if.rb | format(MSG, inverse: node.inverse_keyword, current: node.keyword) | format(MSG, current: node.keyword, inverse: node.inverse_keyword) | pass
 planted bug in a cop | lib/rubocop/cop/style/negated_if.rb | return if node.unless? || node.elsif? || node.ternary? | return if node.unless? || node.ternary? | fail

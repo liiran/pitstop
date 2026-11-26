@@ -7,11 +7,11 @@
     "cores": 12,
     "ruby": "ruby 3.4.12 (2026-10-23 revision 366f5fdc00) +PRISM [x86_64-linux]",
     "terminal": true,
-    "pitstop": "6b57a5d+changes"
+    "pitstop": "10391b2"
   },
   "load_average": [
     1.16,
-    0.47
+    0.77
   ],
   "command": "bundle exec rake test:once",
   "plain_command": "bundle exec rake test:once",
@@ -20,16 +20,16 @@
   "tests": 95,
   "already_failing": 0,
   "plain_s": [
-    11.78,
-    11.7,
-    11.69
+    12.17,
+    12.12,
+    12.25
   ],
   "record_s": [
-    14.79,
-    14.61,
-    14.62
+    15.76,
+    15.93,
+    15.99
   ],
-  "map_kb": 10,
+  "map_kb": 100,
   "changes": [
     {
       "label": "docs only",
@@ -37,14 +37,14 @@
       "expected": "nothing",
       "ok": true,
       "pick_s": [
-        0.15,
-        0.16,
-        0.17
+        0.19,
+        0.19,
+        0.19
       ],
       "run_s": [
-        0.17,
-        0.15,
-        0.17
+        0.18,
+        0.2,
+        0.2
       ],
       "outcome": "nothing",
       "run_all": null,
@@ -57,14 +57,14 @@
       "expected": "nothing",
       "ok": true,
       "pick_s": [
-        0.17,
-        0.16,
-        0.18
+        0.19,
+        0.21,
+        0.21
       ],
       "run_s": [
-        0.16,
-        0.16,
-        0.17
+        0.18,
+        0.2,
+        0.21
       ],
       "outcome": "nothing",
       "run_all": null,
@@ -77,19 +77,19 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.16,
-        0.17,
-        0.16
+        0.19,
+        0.2,
+        0.19
       ],
       "run_s": [
-        13.38,
-        13.05,
-        13.19
+        13.65,
+        13.68,
+        13.49
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 37,
-      "share_of_test_time": 92.9
+      "share_of_test_time": 92.8
     },
     {
       "label": "planted bug in a method",
@@ -97,19 +97,19 @@
       "expected": "fail",
       "ok": true,
       "pick_s": [
-        0.17,
-        0.18,
-        0.17
+        0.2,
+        0.2,
+        0.21
       ],
       "run_s": [
-        12.84,
-        13.11,
-        12.94
+        13.74,
+        13.74,
+        13.5
       ],
       "outcome": "fail",
       "run_all": null,
       "tests_run": 24,
-      "share_of_test_time": 91.8
+      "share_of_test_time": 91.7
     },
     {
       "label": "planted bug in the verdict",
@@ -117,19 +117,19 @@
       "expected": "fail",
       "ok": true,
       "pick_s": [
-        0.18,
-        0.19,
-        0.19
+        0.23,
+        0.23,
+        0.22
       ],
       "run_s": [
-        11.78,
-        11.95,
-        11.89
+        13.67,
+        13.76,
+        13.87
       ],
       "outcome": "fail",
-      "run_all": "lib/deadheat/verdict.rb: Deadheat::Verdict#ok_before? added: it may replace a method the class already had, so any test may depend on it",
-      "tests_run": 95,
-      "share_of_test_time": 100.0
+      "run_all": null,
+      "tests_run": 22,
+      "share_of_test_time": 92.5
     }
   ]
 }

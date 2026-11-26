@@ -20,37 +20,39 @@ It works with Minitest (5 and 6, including Rails' parallel workers) and RSpec, a
 ## How much faster
 
 It depends on what you change. Measured on [Fizzy](https://github.com/basecamp/fizzy), a Rails
-app with 2,708 tests whose whole suite takes 20 seconds:
+app with 2,708 tests whose whole suite took 25 seconds on the day of this table:
 
 | You changed | Tests run | Whole suite | `pitstop run` |
 |---|---|---|---|
-| The inside of one controller action | 9 | 20.3 s | 2.8 s |
-| One template | 14 | 20.3 s | 3.6 s |
-| The inside of one model method | 142 | 20.3 s | 7.6 s |
-| The inside of a method nearly every request runs | 1,031 | 20.3 s | 16.9 s |
-| A constant, or a settings file | all 2,708 | 20.3 s | 20.7 s |
+| The inside of one controller action | 9 | 24.7 s | 3.1 s |
+| One template | 14 | 24.7 s | 4.0 s |
+| A stylesheet | 18 | 24.7 s | 3.8 s |
+| The inside of one model method | 142 | 24.7 s | 8.6 s |
+| The inside of a method nearly every request runs | 1,031 | 24.7 s | 18.7 s |
+| A constant, or a settings file | all 2,708 | 24.7 s | 24.7 s |
 
 Real commits are not all changes inside one method, so the saving over a project's history is
 much smaller. Replaying Fizzy's last 29 commits one by one, `pitstop run` took 6.6 minutes in
 all where the whole suite each time took 10.4 (37% less): 7 commits changed nothing a test can
 be affected by, 6 ran between 9 and 132 tests, and 16 ran everything. Ten of those 16 were
 library updates, and four changed code that runs when a file loads (see
-[below](#code-that-runs-when-a-file-loads)). Over RuboCop's last 8 commits it took 19.3 minutes
-where the whole suite took 26.3 (27% less): 5 of the 8 ran everything, for the same reason.
+[below](#code-that-runs-when-a-file-loads)). Over RuboCop's last 8 commits it took 20.1 minutes
+where the whole suite took 26.0 (22% less): 5 of the 8 ran everything, for the same reason.
 
 To check that nothing gets missed, 92 small bugs were planted one at a time, 52 inside methods
 and 40 outside them. The whole suites caught 70 of them, and `pitstop run` failed for every one
 of those. For the 40 outside methods every failing test was checked, 6,761 in all, and none was
-left out.
+left out. Files that tests read were changed too, 52 of them one at a time: the changes broke
+35 tests, and all 35 were among the ones picked.
 
 What it costs, and where it doesn't help:
 
-- **Recording the map takes 1.2 to 1.7 times a normal run**, and it has to be redone at every
+- **Recording the map takes 1.3 to 1.8 times a normal run**, and it has to be redone at every
   merge: on Fizzy, a map three commits old ran everything at 25 of 27 commits.
 - **A suite whose time goes to a few broad, slow tests gains little.** A small gem whose tests
   start whole Rails apps gained nothing.
-- **In CI the recording on the main branch has to be earned back.** On Fizzy a pull request
-  came out ahead from its third test run, on RuboCop from its second.
+- **In CI the recording on the main branch has to be earned back.** On both projects a pull
+  request came out ahead from its third test run.
 
 How this was measured, every number, and what the numbers don't show:
 [bench/RESULTS.md](bench/RESULTS.md).
@@ -193,6 +195,14 @@ reader in the same process runs too, since any of them may be using what it read
 |---|---|---|
 | Default | runs `test_b` | `test_c` is left out |
 | `tests_after_readers: true` | runs `test_b`, `test_c` and every other test that ran after `test_b` | most of those tests have nothing to do with the file; for a file read early in a run, it is most of the suite |
+
+Measured: every RuboCop commit adds a changelog entry, which one of its specs reads. Over its
+last 8 commits `pitstop run` saved 22% of the test time by default and 9% with the setting,
+which ran about 24,000 of its 36,500 tests at two commits where the default ran about 1,300. When
+files that tests read were changed on purpose in RuboCop and Fizzy (52 changes, 35 failing
+tests), the default left none of the failing tests out. No test like `test_c` turned up in
+either project, which says the case is uncommon there, not that it can't happen
+([the numbers](bench/RESULTS.md#files-that-tests-read)).
 
 The setting never applies to a file whose lines the map follows (Ruby, templates): what stays
 in memory from such a file is code, and a test that runs that code is linked to it anyway.

@@ -1,17 +1,17 @@
 {
   "app": "rubocop",
   "commit": "a97adf34c",
-  "date": "2026-11-23",
+  "date": "2026-11-26",
   "machine": {
     "cpu": "AMD Ryzen 5 9600X 6-Core Processor",
     "cores": 12,
     "ruby": "ruby 4.0.10 (2026-11-19 revision a704b7cd95) +PRISM [x86_64-linux]",
     "terminal": true,
-    "pitstop": "e5fed82+changes"
+    "pitstop": "10391b2"
   },
   "load_average": [
-    2.06,
-    2.05
+    0.71,
+    1.52
   ],
   "command": "(the default)",
   "plain_command": "bundle exec rspec",
@@ -20,49 +20,49 @@
   "tests": 36505,
   "already_failing": 5,
   "plain_s": [
-    192.81,
-    199.53
+    217.76,
+    220.55
   ],
   "record_s": [
-    270.54
+    330.95
   ],
-  "map_kb": 3318,
+  "map_kb": 3579,
   "changes": [
     {
-      "label": "docs only: a changelog entry (only the always-run tests)",
+      "label": "badly formed changelog entry (the changelog's specs catch it)",
       "path": "changelog/fix_an_example_for_this_check.md",
-      "expected": "pass",
+      "expected": "fail",
       "ok": true,
       "pick_s": [
-        0.34,
-        0.42
+        0.45,
+        0.5
       ],
       "run_s": [
-        10.08,
-        10.55
+        12.66,
+        13.11
       ],
-      "outcome": "pass",
+      "outcome": "fail",
       "run_all": null,
-      "tests_run": 8,
-      "share_of_test_time": 4.1
+      "tests_run": 717,
+      "share_of_test_time": 4.2
     },
     {
-      "label": "comment only (the same always-run tests)",
+      "label": "comment only (the specs that read the file as text)",
       "path": "lib/rubocop/cop/style/negated_if.rb",
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.34,
-        0.34
+        0.43,
+        0.45
       ],
       "run_s": [
-        10.02,
-        10.15
+        40.69,
+        41.55
       ],
       "outcome": "pass",
       "run_all": null,
-      "tests_run": 8,
-      "share_of_test_time": 4.1
+      "tests_run": 53,
+      "share_of_test_time": 16.2
     },
     {
       "label": "spec file",
@@ -70,17 +70,17 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.34,
-        0.36
+        0.42,
+        0.43
       ],
       "run_s": [
-        10.3,
-        10.86
+        12.61,
+        12.75
       ],
       "outcome": "pass",
       "run_all": null,
-      "tests_run": 23,
-      "share_of_test_time": 4.1
+      "tests_run": 713,
+      "share_of_test_time": 4.2
     },
     {
       "label": "method, same behaviour",
@@ -88,17 +88,17 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.38,
-        0.41
+        0.44,
+        0.49
       ],
       "run_s": [
-        87.15,
-        89.7
+        98.38,
+        100.56
       ],
       "outcome": "pass",
       "run_all": null,
-      "tests_run": 833,
-      "share_of_test_time": 54.7
+      "tests_run": 854,
+      "share_of_test_time": 53.5
     },
     {
       "label": "planted bug in a cop",
@@ -106,17 +106,17 @@
       "expected": "fail",
       "ok": true,
       "pick_s": [
-        0.36,
-        0.37
+        0.51,
+        0.45
       ],
       "run_s": [
-        86.55,
-        89.55
+        98.85,
+        99.03
       ],
       "outcome": "fail",
       "run_all": null,
-      "tests_run": 833,
-      "share_of_test_time": 54.7
+      "tests_run": 854,
+      "share_of_test_time": 53.5
     },
     {
       "label": "planted bug in a shared mixin",
@@ -124,17 +124,17 @@
       "expected": "fail",
       "ok": true,
       "pick_s": [
-        0.35,
-        0.37
+        0.42,
+        0.46
       ],
       "run_s": [
-        102.46,
-        100.8
+        113.84,
+        114.06
       ],
       "outcome": "fail",
       "run_all": null,
-      "tests_run": 2128,
-      "share_of_test_time": 61.4
+      "tests_run": 2148,
+      "share_of_test_time": 60.3
     },
     {
       "label": "output formatter",
@@ -142,17 +142,17 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.35,
-        0.36
+        0.47,
+        0.47
       ],
       "run_s": [
-        78.63,
-        81.23
+        105.21,
+        102.97
       ],
       "outcome": "pass",
       "run_all": null,
-      "tests_run": 882,
-      "share_of_test_time": 54.2
+      "tests_run": 891,
+      "share_of_test_time": 60.2
     },
     {
       "label": "command line",
@@ -160,17 +160,17 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.35,
-        0.35
+        0.44,
+        0.41
       ],
       "run_s": [
-        103.14,
-        105.95
+        109.65,
+        114.22
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 942,
-      "share_of_test_time": 70.5
+      "share_of_test_time": 72.8
     },
     {
       "label": "method every cop run goes through",
@@ -178,17 +178,17 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.41,
+        0.49,
         0.46
       ],
       "run_s": [
-        180.59,
-        184.43
+        201.77,
+        205.3
       ],
       "outcome": "pass",
       "run_all": null,
       "tests_run": 33661,
-      "share_of_test_time": 92.6
+      "share_of_test_time": 93.3
     },
     {
       "label": "default settings (runs everything)",
@@ -196,12 +196,12 @@
       "expected": "pass",
       "ok": true,
       "pick_s": [
-        0.39,
-        0.41
+        0.47,
+        0.49
       ],
       "run_s": [
-        191.63,
-        208.56
+        218.28,
+        215.53
       ],
       "outcome": "pass",
       "run_all": "config/default.yml: app-wide file",

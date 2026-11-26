@@ -1,0 +1,16 @@
+{
+  "app": "fizzy",
+  "date": "2026-11-26",
+  "what": "pitstop record with three versions of the recorder, next to a plain run, taking turns (bench/e2e/recorders.rb)",
+  "versions": {
+    "e5fed82": "before method names and file reads were noted",
+    "1bb4b2e": "notes method names (for added methods)",
+    "HEAD": "also notes the files tests read (cc082b3)"
+  },
+  "seconds": {
+    "plain": [27.06, 24.54, 24.76, 27.01],
+    "e5fed82": [40.57, 41.47, 39.55, 41.08],
+    "1bb4b2e": [41.83, 40.59, 41.94, 40.46],
+    "HEAD": [42.52, 41.6, 41.76, 42.45]
+  }
+}
