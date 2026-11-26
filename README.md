@@ -100,7 +100,8 @@ one). If that commit is missing, Pitstop runs everything and says why.
 | A test file (changed or new) | that whole file, if the test command runs it (see below) |
 | `Gemfile.lock`, `config/**`, `db/schema.rb`, migrations, test helpers and support files | everything (said why) |
 | Any other file no recorded test read (JSON, YAML…) | everything (said why) |
-| Docs, CI settings, CSS, JavaScript, images | nothing |
+| Docs, CI settings, CSS, JavaScript, images | nothing, unless a recorded test read the file or looked for it |
+| A file a test read, or a folder a test listed (see below) | that test and the tests that ran after it |
 | Only comments or blank lines | nothing |
 
 Tests that failed or were skipped when the map was made always run: their lines weren't all
@@ -141,10 +142,53 @@ Two exceptions, where Pitstop can be sure:
   the new method is picked for its own change. The one thing this takes on trust: no code was
   already reaching for that name by building it (`public_send("on_#{kind}")`).
 
-Two kinds of test need care, because "docs and browser files run nothing" is wrong for them:
+### Files a test reads
 
-- **A test that reads a docs file**, such as a spec that checks the changelog's format. List the
-  file under `global` in `.pitstop.yml`, so a change to it runs everything.
+A test can also depend on a file without running a line of it, by reading it:
+
+```ruby
+# spec/changelog_spec.rb
+Dir["changelog/*.md"].each do |path|                 # one example per changelog entry
+  it "#{path} starts with a star" do
+    expect(File.read(path)).to start_with("* ")
+  end
+end
+```
+
+"Docs run nothing" would skip this spec when an entry is edited, and when one is added. So
+while it records, Pitstop also notes which of the project's files Ruby code opens, which
+folders it lists (and with what pattern), and which files it checks for:
+
+| What happened | Pitstop runs |
+|---|---|
+| A file that a test read was changed | that test, and the tests that ran after it in the same process |
+| A file was added, deleted or renamed, and a test had listed its folder (`Dir["changelog/*.md"]`) or checked for it (`File.exist?`) | the same |
+| The reading or listing was done by a test file's own code as it loaded (the `Dir[...]` above) | that whole test file, so an example gets made for the new entry |
+| It was done while the app was starting | everything (said why) |
+
+- **Why the tests after it?** What one test read may stay in memory (a constant, a cache) and be
+  used by later tests in that process without opening the file again. Which tests ran later is
+  in the recording. For a file read early in a run, that is a large share of the suite.
+  `tests_after_readers: false` in `.pitstop.yml` turns it off: then only the tests that opened
+  the file run, and a test that uses what an earlier one read is not picked.
+- **For a file whose lines the map already follows** (Ruby, templates), only the tests that read
+  it are added. What stays in memory from such a file is code, and a test that runs that code
+  is linked to it anyway. So a spec that reads your source files as text runs when one changes,
+  even if only a comment did.
+- **This only ever adds tests.** A file no test read is treated as the table at the top says.
+- **Your own `ignore` line wins.** If `.pitstop.yml` ignores a file that tests read, they are
+  left out, and the output says so.
+
+What Pitstop can't see, and you list under `global` in `.pitstop.yml`:
+
+- **A file opened by a program that isn't Ruby,** such as a test that runs `git ls-files` or
+  `cat`, or by a gem's own C code. A Ruby program that a test starts is followed.
+- **A file read by a process that never runs a test,** such as the `rake` that starts the tests.
+- **A test file that reads something as it loads, for the use of other test files.** That
+  reading is taken to matter to the test file that did it.
+
+One more kind of test needs care:
+
 - **Tests that drive a browser** (Rails system tests). They depend on CSS and JavaScript, which
   Pitstop doesn't follow. Run them whole, as their own command. `bin/rails test` leaves
   `test/system` out, and so does Pitstop: a changed file in there is named in the output as left
@@ -182,11 +226,14 @@ global: ["app/lib/money.rb"]   # changes here run everything
 
 The lists are `ignore`, `global`, `browser`, `tests`, `test_support` and `ruby`. A change to
 `.pitstop.yml` itself always runs everything, whatever its `ignore` list says.
+`tests_after_readers: false` is the one other setting (see
+[Files a test reads](#files-a-test-reads)).
 
 Your own patterns are checked before the built-in ones, so they can overrule them either way.
 `ignore: ["Gemfile.saas*"]` stops a lockfile your tests never use from running everything.
-`global: ["changelog/**"]` makes a change to a docs folder run everything, for a project where a
-test reads it. Where two of your own lists match the same file, `global` wins.
+`global: ["changelog/**"]` makes a change to a docs folder run everything, for a project where
+something Pitstop can't see reads it. Where two of your own lists match the same file, `global`
+wins.
 
 `command` is a list of words (`bin/rails test` is two), started directly: nothing in it is read
 by a shell, so `&&`, `>` and `$VAR` mean nothing there. For those, point it at a script.

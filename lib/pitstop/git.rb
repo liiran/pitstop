@@ -88,6 +88,13 @@ module Pitstop
       status.success? ? out.force_encoding(Encoding::UTF_8) : nil
     end
 
+    # Was there a folder of this name (with a tracked file in it) at a commit?
+    def folder?(sha, path)
+      check(sha)
+      out, status = Open3.capture2e("git", "-C", @root, "cat-file", "-t", "#{sha}:./#{path}")
+      status.success? && out.strip == "tree"
+    end
+
     # The project's folder inside the repository: "" at the top, "backend/" one level down.
     def prefix = @prefix ||= run("rev-parse", "--show-prefix").strip
 

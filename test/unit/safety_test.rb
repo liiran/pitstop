@@ -202,6 +202,9 @@ class SafetyTest < Minitest::Test
         "a method name that isn't text" => good.merge("methods" => ["total", 7]),
         "classes that aren't a table" => good.merge("modules" => ["Cart"]),
         "a class with made-up marks" => good.merge("modules" => { "Cart" => "x; rm -rf" }),
+        "a reader that isn't one of the tests" => good.merge("opened" => good["opened"].merge("reads" => { "docs/a.md" => [99] })),
+        "a test file above the project, to run whole" => good.merge("opened" => good["opened"].merge("file_reads" => { "../x_test.rb" => ["docs/a.md"] })),
+        "an order of tests that don't exist" => good.merge("order" => [[0, 99]]),
         "a list instead of a map" => [1, 2, 3]
       }
       made_up.each do |name, data|
@@ -254,7 +257,8 @@ class SafetyTest < Minitest::Test
         "ignore: [unclosed\n" => /\.pitstop\.yml can't be read: did not find expected/,
         "command: []\n" => /command should be a list of words/,
         "command: ''\n" => /command should be a list of words/,
-        "command: ['rake', '']\n" => /command should be a list of words/
+        "command: ['rake', '']\n" => /command should be a list of words/,
+        "tests_after_readers: sometimes\n" => /tests_after_readers should be true or false/
       }.each do |yaml, message|
         shop.write(".pitstop.yml", yaml)
         code, _, err = shop.pitstop("list")

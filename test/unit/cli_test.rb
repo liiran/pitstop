@@ -629,4 +629,176 @@ class CLITest < Minitest::Test
       refute_match "didn't run", err
     end
   end
+
+  # --- files a test reads -------------------------------------------------------------------------
+
+  # A project whose tests depend on files without running a line of them: one reads a doc and
+  # keeps it, one counts the docs, one checks a script is there.
+  DOCS_TEST = <<~RUBY
+    require_relative "test_helper"
+    class DocsTest < Minitest::Test
+      i_suck_and_my_tests_are_order_dependent! # in name order, so "the tests after it" are known
+      ROOT = File.expand_path("..", __dir__)
+
+      def notes = $notes ||= File.read("\#{ROOT}/docs/notes.md")
+
+      def test_a_before = assert(true)
+      def test_b_reads_the_notes = assert_equal("notes\\n", notes)
+      def test_c_uses_what_was_read = assert_equal("notes\\n", notes)
+      def test_d_counts_the_docs = assert_equal(%w[guide.md notes.md old], Dir.children("\#{ROOT}/docs").sort)
+      def test_e_finds_the_setup_script = assert(File.exist?("\#{ROOT}/bin/setup"))
+    end
+  RUBY
+
+  def docs_project(extra = {})
+    files = { "lib/cart.rb" => Shop::CART, "lib/price.rb" => Shop::PRICE, "test/test_helper.rb" => Shop::HELPER, "Rakefile" => Shop::RAKEFILE,
+              "test/docs_test.rb" => DOCS_TEST, "docs/notes.md" => "notes\n", "docs/guide.md" => "guide\n", "docs/old/1.md" => "one\n",
+              "bin/setup" => "#!/bin/sh\n" }
+    Fixture.project(files.merge(extra)) do |shop|
+      shop.commit
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      yield shop
+    end
+  end
+
+  def docs_tests(*letters) = letters.map { |letter| DOCS_TEST[/def (test_#{letter}\w+)/, 1] }.map { "DocsTest##{_1}" }
+
+  def test_a_doc_a_test_reads_runs_that_test_and_the_ones_after_it
+    docs_project do |shop|
+      shop.write("docs/guide.md", "a better guide\n")
+      assert_empty picked(shop), "no test reads the guide"
+
+      # test_c never opens the file: it uses what test_b read. Both fail with the new text.
+      shop.write("docs/notes.md", "new notes\n")
+      assert_equal docs_tests("b", "c", "d", "e"), picked(shop)
+      code, out, = run_tests(shop)
+      assert_equal 1, code, out
+      assert_match "2 failures", out
+    end
+  end
+
+  def test_a_file_added_or_removed_runs_the_tests_that_listed_its_folder
+    docs_project do |shop|
+      shop.write("docs/more.md", "more\n")
+      assert_equal docs_tests("d", "e"), picked(shop)
+      shop.delete("docs/more.md")
+
+      shop.delete("docs/guide.md")
+      assert_equal docs_tests("d", "e"), picked(shop)
+    end
+  end
+
+  # `Dir.children("docs")` doesn't look inside docs/old, so a second file there changes nothing
+  # for it. The first file of a new folder does: the folder itself is a new entry in docs.
+  def test_a_new_folder_counts_for_the_tests_that_listed_the_folder_above_it
+    docs_project do |shop|
+      shop.write("docs/old/2.md", "two\n")
+      assert_empty picked(shop)
+
+      shop.write("docs/new/1.md", "one\n")
+      assert_equal docs_tests("d", "e"), picked(shop)
+    end
+  end
+
+  def test_a_file_a_test_only_checks_for_matters_when_it_is_removed
+    docs_project do |shop|
+      shop.write("bin/setup", "#!/bin/sh\necho hello\n")
+      assert_empty picked(shop), "what the script says is nothing the test looked at"
+
+      shop.delete("bin/setup")
+      assert_equal docs_tests("e"), picked(shop)
+    end
+  end
+
+  # One test per changelog entry, made while the test file loads. A new entry means a new test,
+  # which only exists if that test file runs.
+  def test_a_file_added_to_a_folder_a_test_file_lists_as_it_loads_runs_that_test_file
+    entries = <<~RUBY
+      require_relative "test_helper"
+      class ChangelogTest < Minitest::Test
+        Dir[File.expand_path("../changelog/*.md", __dir__)].each do |path|
+          define_method("test_\#{File.basename(path, '.md')}") { assert File.read(path).start_with?("* ") }
+        end
+      end
+    RUBY
+    docs_project("test/changelog_test.rb" => entries, "changelog/fix_a.md" => "* Fixed a.\n") do |shop|
+      shop.write("changelog/fix_b.md", "Fixed b, without the star.\n")
+      assert_equal ["test/changelog_test.rb"], shop.selection["files"]
+      code, out, = run_tests(shop)
+      assert_equal 1, code, out
+      assert_match "test_fix_b", out
+    end
+  end
+
+  def test_a_file_read_while_the_tests_load_runs_everything
+    helper = Shop::HELPER + "LIMITS = File.read(File.expand_path(\"../limits.txt\", __dir__))\n"
+    docs_project("test/test_helper.rb" => helper, "limits.txt" => "3\n") do |shop|
+      shop.write("limits.txt", "4\n")
+      assert_equal :all, picked(shop)
+    end
+  end
+
+  def test_your_own_ignore_line_wins_over_a_recorded_read
+    docs_project(".pitstop.yml" => "ignore:\n  - docs/**\n") do |shop|
+      shop.write("docs/notes.md", "new notes\n")
+      assert_empty picked(shop)
+      assert_match(/your `ignore` line/, shop.selection["reasons"].map { _1["what"] }.join("\n"))
+    end
+  end
+
+  # The file is opened by a second Ruby process that the test starts.
+  def test_a_file_read_by_a_program_the_test_starts_counts_for_that_test
+    test = <<~RUBY
+      require_relative "test_helper"
+      class ReportTest < Minitest::Test
+        def test_prints_the_notes
+          out = IO.popen([Gem.ruby, "-e", "print File.read(ARGV[0])", File.expand_path("../docs/notes.md", __dir__)], &:read)
+          assert_equal "notes\\n", out
+        end
+      end
+    RUBY
+    Fixture.project("lib/cart.rb" => Shop::CART, "lib/price.rb" => Shop::PRICE, "test/test_helper.rb" => Shop::HELPER, "Rakefile" => Shop::RAKEFILE,
+                    "test/report_test.rb" => test, "docs/notes.md" => "notes\n") do |shop|
+      shop.commit
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      shop.write("docs/notes.md", "new notes\n")
+      assert_equal ["ReportTest#test_prints_the_notes"], picked(shop)
+    end
+  end
+
+  # The cheaper setting: only the tests that opened the file. test_c, which uses what test_b
+  # read, fails with the new text and is left out. That is what the setting gives up.
+  def test_with_tests_after_readers_off_only_the_readers_run
+    docs_project(".pitstop.yml" => "tests_after_readers: false\n") do |shop|
+      shop.write("docs/notes.md", "new notes\n")
+      assert_equal docs_tests("b"), picked(shop)
+      assert_match(/tests_after_readers/, shop.selection["reasons"].map { _1["what"] }.join("\n"))
+    end
+  end
+
+  # Paths as real projects write them: a doubled slash, and a pattern whose choices are whole
+  # paths (Rails looks for fixtures with "{/app/test/fixtures/}/users{.yml,/**/*.yml}").
+  def test_untidy_paths_and_patterns_with_choices_are_understood
+    test = <<~RUBY
+      require_relative "test_helper"
+      class LooksTest < Minitest::Test
+        i_suck_and_my_tests_are_order_dependent!
+        ROOT = File.expand_path("..", __dir__)
+
+        def test_a_before = assert(true)
+        def test_b_checks_with_two_slashes = assert(File.exist?("\#{ROOT}/docs//notes.md"))
+        def test_c_lists_with_choices = assert_equal(1, Dir["{\#{ROOT}/docs/}/guide{.md,/**/*.md}"].size)
+      end
+    RUBY
+    docs_project("test/docs_test.rb" => test) do |shop|
+      shop.delete("docs/notes.md")
+      assert_equal %w[LooksTest#test_b_checks_with_two_slashes LooksTest#test_c_lists_with_choices], picked(shop)
+      shop.write("docs/notes.md", "notes\n")
+
+      shop.write("docs/guide/more.md", "more\n")
+      assert_equal %w[LooksTest#test_c_lists_with_choices], picked(shop)
+    end
+  end
 end

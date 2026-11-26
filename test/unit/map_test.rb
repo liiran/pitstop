@@ -142,4 +142,39 @@ class MapTest < Minitest::Test
       assert_raises(Pitstop::Map::Error) { Pitstop::Map.load(path) }
     end
   end
+
+  # --- files a test reads -------------------------------------------------------------------------
+
+  def readers(map, path) = map.readers(path, onward: false).then { |found| found.all ? :all : found.tests.map { map.tests[_1].id }.sort }
+
+  # A spec file's before(:context) hook reads a file once, for all its tests.
+  def test_what_a_test_files_shared_setup_read_counts_for_all_its_tests
+    map = build([rec("A#a", cov: { "lib/cart.rb" => [[5, 5]] }), rec("A#b"), rec("B#a", file: "test/b_test.rb"),
+                 { "kind" => "between", "file" => "test/cart_test.rb", "cov" => {}, "reads" => ["docs/shared.md"] }, summary(3)])
+    assert_equal %w[A#a A#b], readers(map, "docs/shared.md")
+  end
+
+  def test_what_a_program_started_by_a_test_read_counts_for_that_test
+    map = build([rec("A#a", cov: { "lib/cart.rb" => [[5, 5]] }), rec("A#b"), summary(2)],
+                [{ "kind" => "child", "test" => "A#b", "cov" => {}, "reads" => ["docs/a.md"] }])
+    assert_equal %w[A#b], readers(map, "docs/a.md")
+  end
+
+  # Something read the file, and it can't be said for which test: while the app started, in a
+  # freshly forked worker, or in a program started by a test that was never recorded.
+  def test_a_read_no_test_can_be_linked_to_counts_for_every_test
+    tests = [rec("A#a", cov: { "lib/cart.rb" => [[5, 5]] }), summary(1)]
+    [{ "kind" => "boot", "cov" => {}, "reads" => ["docs/a.md"] },
+     { "kind" => "worker_boot", "cov" => {}, "reads" => ["docs/a.md"] },
+     { "kind" => "child", "test" => "Gone#test", "cov" => {}, "reads" => ["docs/a.md"] }].each do |record|
+      assert_equal :all, readers(build(tests, [record]), "docs/a.md"), record["kind"]
+    end
+  end
+
+  def test_the_tests_after_a_reader_are_those_of_its_own_process_in_the_order_they_ran
+    map = build([rec("A#c"), rec("A#a", cov: { "lib/cart.rb" => [[5, 5]] }).merge("reads" => ["docs/a.md"]), rec("A#b"), summary(3)],
+                [rec("B#a", file: "test/b_test.rb"), rec("B#b", file: "test/b_test.rb"), summary(2)])
+    after = map.readers("docs/a.md", onward: true).tests.map { map.tests[_1].id }.sort
+    assert_equal %w[A#a A#b], after
+  end
 end

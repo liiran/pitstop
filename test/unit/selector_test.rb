@@ -20,8 +20,8 @@ class SelectorTest < Minitest::Test
   RUBY
 
   # Three tests: 0 ran Cart#total, 1 ran Cart#full?, 2 rendered the cart template. Test 3 failed.
-  def map(dirty: [])
-    Pitstop::Map.new(
+  def map(dirty: [], opened: nil)
+    Pitstop::Map.new((opened || {}).merge(
       "version" => 1, "commit" => "abc", "dirty" => dirty, "framework" => "minitest",
       "unseen" => ["lib/shop/version.rb"], # loaded by the gemspec before coverage started
       "tests" => [
@@ -40,16 +40,16 @@ class SelectorTest < Minitest::Test
       # methods of Cop, and the methods `Registry` itself has (`def self.x`).
       "methods" => %w[total full? label to_s initialize == on_send],
       "modules" => { "Cart" => "", "Cop" => "i", "Registry" => "c" }
-    )
+    ))
   end
 
-  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART }, mentioned: [])
+  def select(changes, now: { "app/models/cart.rb" => CART }, dirty: [], before: { "app/models/cart.rb" => CART }, mentioned: [], opened: nil, after_readers: true)
     changes = changes.map { |status, path, old| Pitstop::Git::Change.new(status:, path:, old_path: old) }
     Pitstop::Selector.new(
-      map: map(dirty:), changes:,
+      map: map(dirty:, opened:), changes:,
       old_source: ->(path) { before[path] },
       new_source: ->(path) { now[path] },
-      mentioned: ->(name) { mentioned.include?(name) }
+      mentioned: ->(name) { mentioned.include?(name) }, after_readers:
     ).select
   end
 
@@ -305,5 +305,53 @@ class SelectorTest < Minitest::Test
   def test_a_renamed_test_file_runs_whole_under_its_new_name
     s = select([["R", "test/basket_test.rb", "test/cart_test.rb"]])
     assert_equal ["test/basket_test.rb"], s.files.to_a
+  end
+
+  # --- files a test reads -------------------------------------------------------------------------
+
+  # Tests 0 and 1 ran in one process, in that order; 2 and 3 in another.
+  def reading(opened) = { "order" => [[0, 1], [2, 3]], "opened" => NOTHING_OPENED.merge(opened) }
+
+  NOTHING_OPENED = { "reads" => {}, "lists" => {}, "boot_reads" => [], "boot_lists" => [], "file_reads" => {}, "file_lists" => {} }.freeze
+
+  def test_the_tests_after_a_reader_count_only_in_its_own_process
+    s = select([["M", "docs/a.md"]], opened: reading("reads" => { "docs/a.md" => [0] }))
+    assert_equal %w[CartTest#test_full CartTest#test_total], ids(s)
+  end
+
+  # The template's lines are followed: a test that uses what was read from it runs it, and is
+  # linked to it that way. So the reader is added, and not everything that ran after it.
+  def test_a_file_whose_lines_are_followed_adds_its_readers_only
+    s = select([["M", "app/views/carts/show.html.erb"]], opened: reading("reads" => { "app/views/carts/show.html.erb" => [0] }))
+    assert_equal %w[CartTest#test_total CartsControllerTest#test_show], ids(s)
+  end
+
+  def test_a_renamed_file_counts_for_the_readers_of_its_old_name
+    s = select([["R", "guides/a.md", "docs/a.md"]], opened: reading("reads" => { "docs/a.md" => [1] }))
+    assert_equal %w[CartTest#test_full], ids(s)
+  end
+
+  # Before any test runs, the framework lists the test folder to find the test files. A new test
+  # file is run whole because of exactly that, so the listing is no reason to run everything.
+  # The same listing of any other folder is.
+  def test_a_listing_made_while_the_app_starts_runs_everything_except_for_test_files
+    opened = reading("boot_lists" => ["test/**/*_test.rb", "docs/*"])
+    s = select([["A", "test/new_test.rb"]], opened:)
+    refute s.all?
+    assert_equal ["test/new_test.rb"], s.files.to_a
+
+    assert select([["A", "docs/b.md"]], opened:).all?
+    refute select([["M", "docs/b.md"]], opened:).all?, "an edit doesn't change which files there are"
+  end
+
+  def test_a_test_file_that_read_the_file_as_it_loaded_runs_whole
+    s = select([["M", "docs/a.md"]], opened: reading("file_reads" => { "test/carts_controller_test.rb" => ["docs/a.md"] }))
+    assert_equal ["test/carts_controller_test.rb"], s.files.to_a
+    assert_equal %w[CartsControllerTest#test_show], ids(s)
+  end
+
+  def test_with_tests_after_readers_off_the_tests_after_a_reader_are_left_out
+    s = select([["M", "docs/a.md"]], opened: reading("reads" => { "docs/a.md" => [0] }), after_readers: false)
+    assert_equal %w[CartTest#test_total], ids(s)
   end
 end

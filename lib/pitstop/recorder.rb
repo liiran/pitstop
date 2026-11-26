@@ -17,6 +17,10 @@
 #   summary      how many tests the framework says it ran, to check none went unrecorded
 #   error        something that makes the map wrong, such as tests running on threads
 #
+# Besides `cov` (the lines), a record can carry `reads`, the project files opened since the last
+# record, and `lists`, the folders listed, as the patterns asked for ("changelog/*.md"). A test
+# that reads a file or lists a folder depends on it without running a line of it.
+#
 # And, as each process ends, .pitstop/runs/<id>/names-<n>.json: the name of every method any class
 # or module has, and the project's classes and modules (see Record.names!).
 require "coverage"
@@ -69,6 +73,13 @@ module Pitstop
     @recorded = {}
     @listed = { instance: {}.compare_by_identity, private_instance: {}.compare_by_identity,
                 class_side: {}.compare_by_identity, private_class_side: {}.compare_by_identity }
+    @opened = { reads: {}, lists: {} }
+    @while_loading = {}
+    # Files that are written as the suite runs, not read as part of the project.
+    NOT_PROJECT_DATA = Regexp.union(Watch::UNFOLLOWED, %r{\A(log|storage|coverage|\.git)/})
+    TEST_FILE = %r{\A(test|spec)/.*_(test|spec)\.rb\z}
+    GLOB_SIGNS = /[\\*?\[\]{}]/
+    UNTIDY = %r{/\.{0,2}(/|\z)} # "//", "/./", "/../", or a slash at the end
 
     class << self
       # Coverage since the last read, kept only for project files, as {path => [[first, last], ...]}
@@ -127,9 +138,122 @@ module Pitstop
         @booted = true
         @watch&.disable # the frameworks (and SimpleCov, if the project uses it) have loaded by now
         eager_load
-        seen = {}
-        cov = take(seen)
-        write(kind: "boot", cov:, unseen: unseen_files(seen))
+        tracked = {}
+        cov = take(tracked)
+        loading = @while_loading.transform_values { |opened| opened.transform_values(&:keys).reject { |_, list| list.empty? } }
+        write({ kind: "boot", cov:, unseen: unseen_files(tracked), loading: (loading unless loading.empty?), **seen }.compact)
+      end
+
+      # --- files read and folders looked into ----------------------------------------------------
+
+      # Before the tests start, it matters which code asked: see #opened.
+      def loading? = !@booted && !@test && !child?
+
+      # Some code opened this file, or asked something only its contents can answer (its size, when
+      # it last changed). `called_from`: the code that asked, while test files are still loading.
+      def file_read(path, called_from = nil)
+        relative = project_data(path) and opened(:reads, relative, called_from)
+      rescue StandardError
+        nil # noting must never change what the app's own call does
+      end
+
+      # Some code asked which files exist: `Dir["changelog/*.md"]`, `Dir.children("docs")`. What it
+      # depends on is the pattern, since a file added later that matches it changes the answer.
+      def files_listed(patterns, base = nil, called_from = nil)
+        Array(patterns).each do |pattern|
+          pattern = pattern.to_path if !pattern.is_a?(String) && pattern.respond_to?(:to_path)
+          next unless pattern.is_a?(String)
+
+          # "{a,b}/*.yml" is asked as "a/*.yml" and "b/*.yml": a choice may be a whole path, in or
+          # out of the project (Rails asks for "{/app/test/fixtures/}/users{.yml,/**/*.yml}").
+          choices = braces(pattern)
+          # Too many to spell out: any file added or removed might answer it.
+          next opened(:lists, "**/*", called_from) if choices.nil?
+
+          choices.each { |choice| relative = project_data(choice, base) and opened(:lists, relative, called_from) }
+        end
+      rescue StandardError
+        nil
+      end
+
+      # A pattern with its {a,b} choices spelled out; nil when that makes more than `limit`.
+      def braces(pattern, limit = 64)
+        depth = 0
+        cuts = []
+        index = 0
+        while index < pattern.size
+          case pattern[index]
+          when "\\" then index += 1
+          when "{"
+            cuts << index if depth.zero?
+            depth += 1
+          when ","
+            cuts << index if depth == 1
+          when "}"
+            depth -= 1 if depth.positive?
+            if depth.zero? && !cuts.empty?
+              head = pattern[0...cuts.first]
+              tail = pattern[(index + 1)..]
+              all = []
+              [*cuts, index].each_cons(2) do |from, to|
+                found = braces(head + pattern[(from + 1)...to] + tail, limit) or return nil
+                return nil if all.concat(found).size > limit
+              end
+              return all
+            end
+          end
+          index += 1
+        end
+        [pattern]
+      end
+
+      # Some code asked whether this one file or folder exists: a pattern that only it matches.
+      def existence_asked(path, called_from = nil)
+        relative = project_data(path) and opened(:lists, relative.gsub(GLOB_SIGNS) { "\\#{_1}" }, called_from)
+      rescue StandardError
+        nil
+      end
+
+      # The path inside the project, for a file (or pattern) that is part of it; nil for anything
+      # else: files outside it, logs and databases the suite itself writes, things that aren't paths.
+      def project_data(path, base = nil)
+        path = path.to_path if !path.is_a?(String) && path.respond_to?(:to_path)
+        return unless path.is_a?(String) && !path.empty? && !path.start_with?("|") && !path.include?("\0")
+
+        # A plain path under the project is used as it is; anything else ("a//b", "a/../b", a path
+        # from the current folder) is first made into one.
+        full = !base && path.start_with?(PREFIX) && !path.match?(UNTIDY) ? path : File.expand_path(path, *base)
+        return unless in_project?(full)
+
+        relative = full[PREFIX.size..]
+        relative unless relative.empty? || relative.match?(NOT_PROJECT_DATA)
+      end
+
+      # Where a read or a listing belongs. In a test (or between two): to the next record written,
+      # which is that test's or its file's. Before the tests, it depends on the nearest project
+      # code that asked: a test file's own top-level code (a spec that makes one example per file
+      # in a folder) means that test file; anything else is part of starting the app, which every
+      # test depends on.
+      def opened(kind, path, called_from)
+        target = @opened
+        if called_from
+          asker = nil
+          called_from.each do |location|
+            file = relative(location.absolute_path || location.path || "")
+            break asker = file if file && !file.match?(Watch::UNFOLLOWED)
+          end
+          target = (@while_loading[asker] ||= { reads: {}, lists: {} }) if asker&.match?(TEST_FILE)
+        end
+        target[kind][path] = true
+      end
+
+      # What was opened since the last record, to go into the next one.
+      def seen
+        return {} if @opened[:reads].empty? && @opened[:lists].empty?
+
+        was = @opened
+        @opened = { reads: {}, lists: {} }
+        { reads: was[:reads].keys, lists: was[:lists].keys }.reject { |_, list| list.empty? }
       end
 
       # Some code asked for the list of a class's methods (`side` says which ones). Whatever it
@@ -251,7 +375,7 @@ module Pitstop
         if @test
           become_child(@test[:id])
         elsif !child?
-          write(kind: "worker_boot", cov: take)
+          write(kind: "worker_boot", cov: take, **seen)
         end
       end
 
@@ -262,7 +386,8 @@ module Pitstop
 
       def child_finished
         cov = take
-        write(kind: "child", test: @child_of, cov:) unless cov.empty?
+        opened = seen
+        write(kind: "child", test: @child_of, cov:, **opened) unless cov.empty? && opened.empty?
       end
 
       # RSpec is about to run a spec file's top-level group, starting with its before(:context)
@@ -275,7 +400,8 @@ module Pitstop
           start_group(file)
         else
           shared = take # the previous group's after(:context) hooks
-          write(kind: "between", file: @last_file, cov: shared) if @last_file && !shared.empty?
+          opened = @last_file ? seen : {}
+          write(kind: "between", file: @last_file, cov: shared, **opened) if @last_file && !(shared.empty? && opened.empty?)
           @context_file = file
         end
       end
@@ -293,7 +419,8 @@ module Pitstop
           start_group(file)
         elsif @context_file
           shared = take # this file's before(:context) hooks
-          write(kind: "between", file: @context_file, cov: shared) unless shared.empty?
+          opened = seen
+          write(kind: "between", file: @context_file, cov: shared, **opened) unless shared.empty? && opened.empty?
           @context_file = nil
         end
         @test = { id:, thread: Thread.current }
@@ -316,7 +443,7 @@ module Pitstop
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         cov = take
         take_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3)
-        write(kind: "test", framework:, id:, file:, line:, status:, ms:, take_ms:, cov:)
+        write(kind: "test", framework:, id:, file:, line:, status:, ms:, take_ms:, cov:, **seen)
         auto_switch(take_ms, ms)
       end
 
@@ -343,7 +470,7 @@ module Pitstop
 
         group = @group
         @group = nil
-        write(kind: "group", file: group[:file], tests: group[:tests], cov: take)
+        write(kind: "group", file: group[:file], tests: group[:tests], cov: take, **seen)
       end
 
       def finished(framework:, ran:, unrecorded: nil)
@@ -585,6 +712,62 @@ module Pitstop
     ensure
       $VERBOSE = quiet
     end
+
+    # Notes which files get read and which folders get looked into, then does what Ruby would.
+    # Replaced in place, like the method listings above. What this can't see is in the README:
+    # a file opened by a program the test starts that isn't Ruby, or by a gem's C code.
+    def self.watch_files
+      quiet, $VERBOSE = $VERBOSE, nil
+      # The code that asked, while test files are still loading (see Record.opened).
+      from = -> { Pitstop::Record.loading? ? caller_locations(2, 25) : nil }
+      wrap = lambda do |owner, name, &note|
+        original = owner.method(name).unbind
+        owner.define_singleton_method(name) do |*args, **options, &block|
+          note.(args, options, from.call)
+          original.bind_call(self, *args, **options, &block)
+        end
+      end
+
+      # File.open, File.new, Kernel#open and Pathname#open all make a File.
+      open_file = File.instance_method(:initialize)
+      File.define_method(:initialize) do |*args, **options, &block|
+        Pitstop::Record.file_read(args.first, from.call)
+        open_file.bind_call(self, *args, **options, &block)
+      end
+      File.send(:private, :initialize)
+      # These read a file without making a File, or answer from its contents. `realpath` is here
+      # because Bootsnap asks for it before loading a YAML or JSON file through its own C code.
+      %i[read binread readlines foreach copy_stream sysopen].each do |name|
+        wrap.(IO, name) { |args, _, asker| Pitstop::Record.file_read(args.first, asker) }
+      end
+      %i[stat lstat mtime size realpath realdirpath].each do |name|
+        wrap.(File, name) { |args, _, asker| Pitstop::Record.file_read(args.first, asker) }
+      end
+
+      [File, FileTest].each do |owner|
+        %i[exist? file? directory? readable? symlink? size? zero? empty?].each do |name|
+          next unless owner.respond_to?(name)
+
+          wrap.(owner, name) { |args, _, asker| Pitstop::Record.existence_asked(args.first, asker) }
+        end
+      end
+      wrap.(Dir, :exist?) { |args, _, asker| Pitstop::Record.existence_asked(args.first, asker) }
+
+      wrap.(Dir, :glob) { |args, options, asker| Pitstop::Record.files_listed(args.first, options[:base], asker) }
+      wrap.(Dir, :[]) { |args, options, asker| Pitstop::Record.files_listed(args, options[:base], asker) }
+      everything_in = ->(folder) { folder.is_a?(String) || folder.respond_to?(:to_path) ? File.join(folder, "*") : nil }
+      %i[children entries each_child foreach open empty?].each do |name|
+        wrap.(Dir, name) { |args, _, asker| Pitstop::Record.files_listed(everything_in.(args.first), nil, asker) }
+      end
+      open_folder = Dir.instance_method(:initialize)
+      Dir.define_method(:initialize) do |*args, **options, &block|
+        Pitstop::Record.files_listed(everything_in.(args.first), nil, from.call)
+        open_folder.bind_call(self, *args, **options, &block)
+      end
+      Dir.send(:private, :initialize)
+    ensure
+      $VERBOSE = quiet
+    end
   end
 end
 
@@ -592,6 +775,7 @@ Coverage.setup(lines: true, eval: true)
 Coverage.resume
 Process.singleton_class.prepend(Pitstop::Record::ForkWatch) if Process.respond_to?(:_fork)
 Pitstop::Record.watch_listing
+Pitstop::Record.watch_files
 at_exit { Pitstop::Record.names! } # registered first, so it runs last, after the tests
 if Pitstop::Record.child?
   # Started from inside a test: everything this process runs belongs to that test.

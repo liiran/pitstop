@@ -25,7 +25,7 @@ module Pitstop
       `bin/rails test`, `bundle exec rspec` (a project with spec/ and no test/) or `bundle exec rake test`.
     TEXT
 
-    CONFIG_KEYS = (Rules::DEFAULTS.keys + ["command"]).freeze
+    CONFIG_KEYS = (Rules::DEFAULTS.keys + %w[command tests_after_readers]).freeze
 
     # What `pitstop run` will run: tests from the map, plus whole test files (new or changed ones).
     Plan = Struct.new(:tests, :files, keyword_init: true) do
@@ -329,10 +329,13 @@ module Pitstop
       end
 
       Selector.new(
-        map:, changes: git.changes_since(map.commit).reject { _1.path.start_with?(".pitstop/") }, rules: Rules.new(config.reject { _1 == "command" }),
+        map:, changes: git.changes_since(map.commit).reject { _1.path.start_with?(".pitstop/") }, rules: Rules.new(config.slice(*Rules::DEFAULTS.keys)),
         old_source: ->(path) { git.show(map.commit, path) },
         new_source: ->(path) { full = File.join(root, path); File.file?(full) ? File.read(full) : nil },
-        mentioned: ->(name) { git.mentioned?(map.commit, name) }
+        mentioned: ->(name) { git.mentioned?(map.commit, name) },
+        folder_then: ->(folder) { git.folder?(map.commit, folder) },
+        folder_now: ->(folder) { File.directory?(File.join(root, folder)) },
+        after_readers: config["tests_after_readers"] != false
       ).select
     end
 
@@ -352,6 +355,11 @@ module Pitstop
           raise ArgumentError, ".pitstop.yml: unknown setting #{unknown.first.inspect} (known: #{CONFIG_KEYS.join(', ')})" unless unknown.empty?
 
           data.each do |key, value|
+            if key == "tests_after_readers"
+              next if [true, false].include?(value)
+
+              raise ArgumentError, ".pitstop.yml: tests_after_readers should be true or false"
+            end
             next if key == "command" ? (value.is_a?(String) && !value.strip.empty?) || words?(value) : string_list?(value)
 
             raise ArgumentError, ".pitstop.yml: #{key} should be a list of #{key == 'command' ? 'words' : 'file patterns'}"

@@ -18,13 +18,17 @@ module Pitstop
       def all? = !run_all.nil?
     end
 
-    def initialize(map:, changes:, old_source:, new_source:, rules: Rules.new, mentioned: ->(_) { true })
+    def initialize(map:, changes:, old_source:, new_source:, rules: Rules.new, mentioned: ->(_) { true },
+                   folder_then: ->(_) { false }, folder_now: ->(_) { false }, after_readers: true)
       @map = map
       @changes = changes
       @old_source = old_source # ->(path) { content at the map's commit, or nil }
       @new_source = new_source # ->(path) { content now, or nil }
       @rules = rules
       @mentioned = mentioned # ->(word) { does it appear anywhere in the project at the map's commit? }
+      @folder_then = folder_then # ->(folder) { was it there at the map's commit? }
+      @folder_now = folder_now # ->(folder) { is it there now? }
+      @after_readers = after_readers # also run the tests that ran after a file's reader?
     end
 
     def select
@@ -34,7 +38,7 @@ module Pitstop
       @run_all = nil
 
       @changes.each { consider(_1) }
-      @map.dirty.each { dirty_file(_1) }
+      @map.dirty.each { |path| with_openers(path, "?") { dirty_file(path) } }
       unfinished = @map.tests.select(&:failed?).map(&:index)
       note(nil, "didn't pass when the map was made", unfinished) unless unfinished.empty?
 
@@ -52,15 +56,69 @@ module Pitstop
       verdict = @rules.classify(path)
       return outside(path, verdict) if path.start_with?("../")
 
-      case verdict.kind
-      when :ignore then note(path, verdict.reason, [])
-      when :global then run_all(path, verdict.reason)
-      when :test then test_file(path, status)
-      when :browser
-        status == "D" ? run_all(path, "browser-only file deleted") : note(path, verdict.reason, [])
-      when :ruby then ruby_file(path, status)
-      else other_file(path, status, verdict)
+      with_openers(path, status) do
+        case verdict.kind
+        when :ignore then note(path, verdict.reason, [])
+        when :global then run_all(path, verdict.reason)
+        when :test then test_file(path, status)
+        when :browser
+          status == "D" ? run_all(path, "browser-only file deleted") : note(path, verdict.reason, [])
+        when :ruby then ruby_file(path, status)
+        else other_file(path, status, verdict)
+        end
       end
+    end
+
+    # Whatever the rules above say about a file, a test can depend on it without running a line
+    # of it: a spec that checks the changelog's format reads the changelog, and one that makes
+    # an example per file in a folder depends on which files are there. The recording noted both,
+    # and those tests are added here. They are only ever added: nothing is narrowed by this.
+    def with_openers(path, status)
+      first = @reasons.size
+      yield
+      return if path.start_with?("../") || @reasons[first..].any?(&:all)
+
+      # The tests that read the file are added. What one of them read may be kept in memory (in a
+      # constant, a cache) and used by tests that ran after it in the same process without
+      # opening the file again, so those are added too, unless the project turned that off
+      # (`tests_after_readers: false`: for a file read early in a run they are most of the
+      # suite). Never for a file whose lines the map follows: what stays in memory from it is
+      # code, and a test that runs that code is linked to it already.
+      onward = @after_readers && !@map.covered?(path)
+      found = [@map.readers(path, onward:)]
+      # Whether the file exists only changed if it was added, deleted or renamed.
+      unless status == "M"
+        # A test framework finds its test files by listing folders before any test runs. That is
+        # how a new test file gets to run at all, and a new test file is run whole anyway, so
+        # for test files those listings aren't a reason to run everything.
+        discovery = @rules.classify(path).kind == :test
+        found << @map.listers(path, moved_folders(path), onward:, boot: !discovery)
+      end
+      return if found.all?(&:none?)
+
+      asked = if status == "M" || found.last.none? then "read it"
+              else found.first.none? ? "looked for files like it" : "read it or looked for files like it"
+              end
+      if @rules.own_ignore?(path)
+        return note(path, "recorded tests #{asked}, but your `ignore` line leaves them out", [])
+      end
+      return run_all(path, "something #{asked} while the app was starting, so any test may depend on it") if found.any?(&:all)
+
+      files = found.flat_map(&:files).uniq.sort
+      @files.merge(files)
+      tests = files.reduce(found.map(&:tests).reduce(:|)) { |all, file| all | @map.tests_in_file(file) }
+      scope = if onward then " (those, and the tests that ran after them)"
+              elsif !@after_readers && !@map.covered?(path) then " (those only: `tests_after_readers` is off)"
+              end
+      note(path, "recorded tests #{asked}#{scope}", tests)
+    end
+
+    # The folders above a file that weren't there at the map's commit or aren't there now: they
+    # appear or vanish with it, which answers a question such as `Dir["docs/*"]` too.
+    def moved_folders(path)
+      folders = []
+      folders << File.dirname(folders.last || path) while (folders.last || path).include?("/")
+      folders.reject { @folder_then.(_1) && @folder_now.(_1) }
     end
 
     # A file elsewhere in the repository, when the project is one folder of it. The map only

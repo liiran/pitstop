@@ -57,6 +57,11 @@ module Pitstop
         Verdict.new(:other, "#{other_kind(path)} (not followed yet)")
     end
 
+    # Did the project's own `ignore` list (not the built-in one) decide about this file?
+    def own_ignore?(path)
+      among(@own, %w[global ignore tests test_support ruby browser], path)&.kind == :ignore
+    end
+
     # A short name for a non-Ruby file, so reports can say what blocks selection most often.
     def other_kind(path)
       case path

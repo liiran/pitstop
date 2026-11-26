@@ -15,8 +15,18 @@ module Pitstop
   # Under "files", tests that ran exactly the same lines of a file share one entry: the lines,
   # then the test numbers (positions in "tests"). That keeps big suites' maps small.
   # "methods" and "modules" are what the recorder noted about names (Record.names!).
+  #
+  # "opened" and "order" are about files a test depends on without running a line of them:
+  #
+  #    "opened": {"reads": {"docs/notes.md": [0, 4]},        tests that read this file
+  #               "lists": {"docs/*.md": [2], "bin/setup": [5]},   tests that asked which files
+  #                                           match a pattern, or whether one file exists
+  #               "boot_reads": [...], "boot_lists": [...],  the same, while the app was starting
+  #               "file_reads": {"test/x_test.rb": [...]},   by a test file's own code as it
+  #               "file_lists": {...}},                      loaded
+  #    "order":  [[0, 2, 1], [3]]             each test process's tests, in the order they ran
   class Map
-    VERSION = 2
+    VERSION = 3
     Test = Struct.new(:index, :id, :file, :line, :status, :ms) do
       def failed? = status != "pass"
     end
@@ -35,9 +45,8 @@ module Pitstop
     attr_reader :warnings
 
     def self.build(shard_dir, commit:, dirty: [])
-      records = Dir[File.join(shard_dir, "*.jsonl")].sort.flat_map do |path|
-        File.foreach(path).map { JSON.parse(_1) }
-      end
+      shards = Dir[File.join(shard_dir, "*.jsonl")].sort.map { |path| File.foreach(path).map { JSON.parse(_1) } }
+      records = shards.flatten(1)
       error = records.find { _1["kind"] == "error" }
       raise Error, error["message"] if error
       if records.none? { _1["kind"] == "test" }
@@ -85,11 +94,52 @@ module Pitstop
         "tests" => list.map { [_1["id"], _1["file"], _1["line"], _1["status"], _1["ms"]] },
         "boot" => boot.transform_values { merge_ranges(_1) },
         "files" => by_file.transform_values { |sets| sets.map { |ranges, idx| [ranges, idx.uniq.sort] } },
+        **opened(shards, number, in_file),
         "methods" => (names.flat_map { _1["methods"] }.uniq.sort unless names.empty?),
         "modules" => (names.map { _1["modules"] }.reduce { |all, some| all.merge(some) { |_, a, b| (a + b).chars.uniq.sort.join } } unless names.empty?)
       }.compact)
       map.check(by_kind)
       map
+    end
+
+    # Who read which file and looked for which files ("order" and "opened", described at the top).
+    def self.opened(shards, number, in_file)
+      order = []
+      found = { "reads" => {}, "lists" => {}, "boot_reads" => [], "boot_lists" => [], "file_reads" => {}, "file_lists" => {} }
+      shards.each do |records|
+        ran = records.select { _1["kind"] == "test" }.filter_map { number[_1["id"]] }.uniq
+        order << ran unless ran.empty?
+        records.each do |record|
+          who = case record["kind"]
+                when "test" then [number[record["id"]]]
+                when "group" then record["tests"].map { number[_1] }
+                # Setup or cleanup shared by a spec file: what it read is there for all its tests.
+                when "between" then in_file.key?(record["file"]) ? in_file[record["file"]] : [nil]
+                when "child" then [number[record["test"]]]
+                when "boot", "worker_boot" then [nil]
+                else next
+                end
+          %w[reads lists].each do |kind|
+            (record[kind] || []).each do |key|
+              # Read while the app was starting, or by something no recorded test can be linked
+              # to: every test may depend on it.
+              next found["boot_#{kind}"] << key if who.empty? || who.include?(nil)
+
+              (found[kind][key] ||= []).concat(who)
+            end
+          end
+          (record["loading"] || {}).each do |test_file, opened|
+            %w[reads lists].each { |kind| (found["file_#{kind}"][test_file] ||= []).concat(opened[kind] || []) }
+          end
+        end
+      end
+      %w[reads lists].each do |kind|
+        found[kind].transform_values! { _1.uniq.sort }
+        found["file_#{kind}"].transform_values! { _1.uniq.sort }
+        found["file_#{kind}"].reject! { |_, keys| keys.empty? }
+        found["boot_#{kind}"] = found["boot_#{kind}"].uniq.sort
+      end
+      { "order" => order, "opened" => found }
     end
 
     def check(by_kind)
@@ -175,6 +225,8 @@ module Pitstop
         return "its classes"
       end
 
+      return "its record of files read" unless opened?(data["order"], data["opened"], tests.size)
+
       files = data["files"]
       return "its files" unless files.is_a?(Hash)
 
@@ -195,6 +247,18 @@ module Pitstop
     def self.test?(test)
       test.is_a?(Array) && test[0].is_a?(String) && (test[1].nil? || inside?(test[1])) &&
         (test[2].nil? || test[2].is_a?(Integer)) && STATUSES.include?(test[3]) && (test[4].nil? || test[4].is_a?(Numeric))
+    end
+
+    def self.opened?(order, opened, tests)
+      return true if order.nil? && opened.nil?
+
+      numbers = ->(list) { list.is_a?(Array) && list.all? { _1.is_a?(Integer) && _1 >= 0 && _1 < tests } }
+      names = ->(list) { list.is_a?(Array) && list.all? { _1.is_a?(String) && !_1.include?("\0") } }
+      by_test = ->(table) { table.is_a?(Hash) && table.all? { |key, list| names.([key]) && numbers.(list) } }
+      by_file = ->(table) { table.is_a?(Hash) && table.all? { |file, list| inside?(file) && names.(list) } }
+      order.is_a?(Array) && order.all?(&numbers) && opened.is_a?(Hash) &&
+        by_test.(opened["reads"]) && by_test.(opened["lists"]) && names.(opened["boot_reads"]) && names.(opened["boot_lists"]) &&
+        by_file.(opened["file_reads"]) && by_file.(opened["file_lists"])
     end
 
     def self.ranges?(ranges)
@@ -219,7 +283,56 @@ module Pitstop
       @unseen = data["unseen"] || []
       @methods = data["methods"]&.to_set
       @modules = data["modules"]
+      @order = data["order"]
+      @opened = data["opened"]
       @warnings = []
+    end
+
+    # The tests that depend on a file without running a line of it. `all`: something read it
+    # while the app was starting, so every test may. `tests`: test numbers. `files`: test files
+    # whose own top-level code read it as they loaded (they run whole).
+    Dependents = Struct.new(:all, :tests, :files) do
+      def none? = !all && tests.empty? && files.empty?
+    end
+
+    LISTED = File::FNM_PATHNAME | File::FNM_EXTGLOB | File::FNM_DOTMATCH
+
+    # Who read this file: its contents matter to them. `onward`: also every test that ran after
+    # a reader in the same process, because what was read may have stayed in memory (a constant,
+    # a cache) and been used without reading the file again.
+    def readers(path, onward:) = dependents("reads", onward) { _1 == path }
+
+    # Who asked which files exist, in a way this file's being there answers: it matched a pattern
+    # they listed (`Dir["docs/*.md"]`), or they checked for it by name. `folders`: the folders
+    # above it that appear or vanish with it, which answer such questions too (`Dir["docs/*"]`
+    # lists a new `docs/guides` when its first file is added). `boot: false` leaves out what
+    # was asked while the app was starting.
+    def listers(path, folders, onward:, boot: true)
+      names = [path, *folders]
+      dependents("lists", onward, boot:) { |pattern| names.any? { File.fnmatch?(pattern.chomp("/"), _1, LISTED) } }
+    end
+
+    def dependents(kind, onward, boot: true, &match)
+      return Dependents.new(false, Set.new, []) unless @opened
+      return Dependents.new(true, Set.new, []) if boot && @opened["boot_#{kind}"].any?(&match)
+
+      tests = Set.new
+      @opened[kind].each { |key, readers| tests.merge(readers) if match.(key) }
+      tests = from_first(tests) if onward
+      Dependents.new(false, tests, @opened["file_#{kind}"].select { |_, keys| keys.any?(&match) }.keys)
+    end
+
+    # These tests, and every test that ran after one of them in the same process.
+    def from_first(tests)
+      @place ||= @order.each_with_index.with_object({}) do |(ran, process), place|
+        ran.each_with_index { |test, position| place[test] ||= [process, position] }
+      end
+      first = {}
+      tests.each do |test|
+        process, position = @place[test]
+        first[process] = position if process && (first[process].nil? || position < first[process])
+      end
+      first.each_with_object(tests.dup) { |(process, position), all| all.merge(@order[process][position..]) }
     end
 
     # Did any class or module have a method of this name while the map was recorded: the
