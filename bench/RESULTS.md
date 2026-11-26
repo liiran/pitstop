@@ -36,7 +36,8 @@ Measured in November 2026, at commits `67305be` (Fizzy), `a97adf3` (RuboCop) and
   suite.
 - **No planted bug got through.** 92 small bugs were planted, 52 inside methods and 40 outside
   them. The whole suites catch 70 of them, and `pitstop run` failed for every one of those. For
-  the 40 outside methods every failing test was checked: 6,761 in all, none left out.
+  the 40 outside methods every failing test was checked: 6,761 in all, none left out. (No bug
+  has been planted as an added method yet, the one case that has been narrowed since.)
 - **A changed file runs the tests that read it.** A spec that checks the changelog runs when an
   entry changes: 35 tests failed when RuboCop's entries were emptied one by one, and all 35
   were picked. A test that only uses what an earlier test read is left out unless
@@ -368,6 +369,8 @@ the same process. The replayed commits, asked and timed again with it:
 - **On Fizzy none of the 29 commits changes.** A change to a stylesheet or a script would:
   among the planted changes below, an emptied stylesheet picks 18 tests by default and 2,617 of 2,708 with the
   setting, because the first test to render a page in each of the twelve processes reads them.
+  A newly added stylesheet, script or image (asked for, not run) picks 18 to 22 tests by
+  default and 2,538 with the setting. Before this rule Pitstop ran nothing for any of these.
 
 **Does the default leave failing tests out?** Files that tests read were changed one at a
 time: emptied, deleted, or joined by a new file in a folder that tests had listed. Where
@@ -533,6 +536,12 @@ fix, 6 of those 23 had failing tests left out, and for one of the six `pitstop r
 
 The bugs no test catches are gaps in the projects' own tests. The whole suite passes with them
 too, so they say nothing about Pitstop.
+
+**What these bugs don't cover yet.** They were planted before two later rules. One only adds
+tests (the files that tests read, checked in its own section above). The other narrows: a
+method added under a name nothing used before now runs the tests that ran its file, where it
+ran everything when these bugs were planted. No bug has been planted as an added method, so
+that rule rests on its reasoning and on Pitstop's own tests, not on a check like these.
 
 **Real commits.** Every replayed commit was also run whole, so a test that started failing at a
 commit and wasn't picked would have shown up. None did, but that says little: no test started

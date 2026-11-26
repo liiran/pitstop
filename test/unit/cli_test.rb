@@ -147,11 +147,11 @@ class CLITest < Minitest::Test
       %w[Rakefile test/test_helper.rb Gemfile config/settings.rb .ruby-version].each do |path|
         assert_equal :all, try(shop) { shop.write(path, "# changed\n") }, path
       end
-      # A file the map can't follow and no test was seen reading: everything, with the reason.
+      # A data file the map can't follow: everything, with the reason.
       shop.write("lib/rates.json", "{}")
       code, out, = shop.pitstop("list")
       assert_equal 0, code
-      assert_match "lib/rates.json  .json file, not seen by any recorded test  → all tests", out
+      assert_match "lib/rates.json  .json file, which any test may depend on  → all tests", out
       shop.delete("lib/rates.json")
 
       # Docs and browser-only files: nothing.

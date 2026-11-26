@@ -64,6 +64,7 @@ begin
       row.delete("run_again")
     else
       row["needs_timing"] = true
+      row.delete("run_again") # timings of the old pick
     end
   end
 ensure

@@ -101,9 +101,9 @@ one). If that commit is missing, Pitstop runs everything and says why.
 | A new template | everything (said why) |
 | A test file (changed or new) | that whole file, if the test command runs it (see below) |
 | `Gemfile.lock`, `config/**`, `db/schema.rb`, migrations, test helpers and support files | everything (said why) |
-| Any other file no recorded test read (JSON, YAML…) | everything (said why) |
+| Any other file (JSON, YAML, fixtures…) | everything (said why), also when a test was seen reading it |
 | Docs, CI settings, CSS, JavaScript, images | nothing, unless a recorded test read the file or looked for it |
-| A file a test read, or a folder a test listed (see below) | the tests that read it or listed it |
+| A doc, script or browser file that a test read, or whose folder a test listed (see below) | the tests that read it or listed it |
 | Only comments or blank lines | nothing |
 
 Tests that failed or were skipped when the map was made always run: their lines weren't all
@@ -171,6 +171,9 @@ folders it lists (and with what pattern), and which files it checks for:
 - **A spec that reads your source files as text** runs when one of them changes, even if only
   a comment did.
 - **This only ever adds tests.** A file no test read is treated as the table at the top says.
+- **Other data files still run everything.** A JSON or YAML file that isn't docs runs everything
+  when it changes, whether or not a test was seen reading it: such a file may be used in ways
+  no read shows.
 - **Your own `ignore` line wins.** If `.pitstop.yml` ignores a file that tests read, they are
   left out, and the output says so.
 

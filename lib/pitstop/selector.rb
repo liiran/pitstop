@@ -257,7 +257,9 @@ module Pitstop
       elsif status == "A" && @rules.other_kind(path) == "template"
         run_all(path, "new template: it may be picked up by its name alone")
       else
-        run_all(path, verdict.reason.sub(" (not followed yet)", ", not seen by any recorded test"))
+        # Also when a test was seen reading it: who read a file narrows docs and browser files,
+        # which are taken not to matter to anyone else. A data file may.
+        run_all(path, verdict.reason.sub(" (not followed yet)", ", which any test may depend on"))
       end
     end
 
