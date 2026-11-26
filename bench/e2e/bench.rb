@@ -16,7 +16,8 @@ $stdout.sync = true # progress shows as it happens, also when the output goes to
 
 module Bench
   PITSTOP_DIR = File.expand_path("../..", __dir__)
-  PITSTOP = [Gem.ruby, File.join(PITSTOP_DIR, "exe", "pitstop")].freeze
+  # AFTER_READERS=1 measures the `tests_after_readers: true` setting (see pitstop_tests_after_readers.rb).
+  PITSTOP = [Gem.ruby, File.join(PITSTOP_DIR, *(ENV["AFTER_READERS"] == "1" ? %w[bench e2e pitstop_tests_after_readers.rb] : %w[exe pitstop]))].freeze
   # A run that takes longer than this is stopped and counted as failed (exit status 124).
   LIMIT = Float(ENV.fetch("LIMIT", "3600"))
   TERMINAL = ENV["TERMINAL"] != "0"

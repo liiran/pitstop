@@ -18,11 +18,19 @@
 # or a line such as `validates :name, presence: true` or `include Comparable` is taken out. A test can
 # depend on that code without running a line of the file, which is what makes it the hard case.
 #
+# WHERE=read changes files that tests read instead of code they run: a doc, an image, a script.
+# The file is emptied or deleted, or a new file is added to a folder that tests listed. Where
+# Pitstop runs everything for the change, no test can be left out, so such a change is only
+# counted; <how many> is the number of changes it runs less than everything for. Each of those
+# is asked for twice, without and with `tests_after_readers`, so the results say what the
+# default leaves out and what the stricter setting costs.
+#
 # Environment:
 #   PLAIN_COMMAND  the whole suite without Pitstop (required)
 #   SOURCES        where to plant bugs (default "app/**/*.rb,lib/**/*.rb")
 #   SEED           picks the bugs (default 1)
-#   WHERE          inside (methods, the default) or outside (code that runs when a file loads)
+#   WHERE          inside (methods, the default), outside (code that runs when a file loads) or
+#                  read (files that tests read)
 require "prism"
 require_relative "bench"
 
@@ -156,9 +164,32 @@ sites = ENV.fetch("SOURCES", "app/**/*.rb,lib/**/*.rb").split(",").flat_map { Di
     { path:, line:, method:, what:, source:, changed: } if Prism.parse(changed).success?
   end
 end
+if ENV["WHERE"] == "read"
+  opened = map.fetch("opened")
+  followed = ->(path) { map["files"].key?(path) || map["boot"].key?(path) }
+  test_file = ->(path) { path.match?(%r{\A(test|spec)/.*_(test|spec)\.rb\z}) }
+  # Files a test read (or a test file read as it loaded) that the map doesn't follow by their
+  # lines: what Pitstop knows about them is only who read them.
+  read = (opened["reads"].keys + opened["file_reads"].values.flatten).uniq.sort
+  read = read.select { File.file?(_1) && !followed.(_1) && !test_file.(_1) }
+  sites = read.flat_map do |path|
+    source = File.binread(path)
+    [{ path:, line: 0, method: nil, what: "file emptied", source:, changed: "" },
+     { path:, line: 0, method: nil, what: "file deleted", source:, changed: nil }]
+  end
+  # A new file where tests looked: one per listed pattern that a made-up name can match.
+  listed = (opened["lists"].keys + opened["file_lists"].values.flatten).uniq.sort.grep(/\*/).reject { _1.match?(/[\[\]{}?\\]/) }
+  sites += listed.filter_map do |pattern|
+    path = pattern.gsub("**/", "").gsub("*", "pitstop_planted")
+    next if File.exist?(path) || !File.directory?(File.dirname(path)) || test_file.(path) || path.end_with?(".rb")
+
+    { path:, line: 0, method: nil, what: "file added", source: nil, changed: "pitstop planted\n" }
+  end.uniq { _1[:path] }
+end
 random = Random.new(Integer(ENV.fetch("SEED", "1")))
 # One bug per method, or outside methods one per file, so a few big files don't take them all.
-chosen = sites.group_by { outside ? _1[:path] : [_1[:path], _1[:method]] }.values.map { _1.sample(random:) }.shuffle(random:).first(Integer(count))
+chosen = sites.group_by { outside || ENV["WHERE"] == "read" ? _1[:path] : [_1[:path], _1[:method]] }.values.map { _1.sample(random:) }.shuffle(random:)
+chosen = chosen.first(Integer(count)) unless ENV["WHERE"] == "read"
 puts "#{sites.size} places to plant a bug in #{sites.map { _1[:path] }.uniq.size} files; trying #{chosen.size}"
 
 failed = ->(output, exit_code) { exit_code != 0 && (baseline.zero? || output.scan(/(\d+) (?:failures|errors)/).flatten.sum(&:to_i) > baseline || Bench.framework_ran(output).zero?) }
@@ -173,18 +204,33 @@ failing = lambda do |output|
   found += output.scan(/[A-Z][\w:]*#test_\S+/).map { _1.delete_suffix(":") }
   found.uniq.select { known.include?(_1) }
 end
-done = File.exist?(out_path) ? File.readlines(out_path).map { JSON.parse(_1).values_at("path", "line", "what") } : []
+earlier = File.exist?(out_path) ? File.readlines(out_path).map { JSON.parse(_1) } : []
+done = earlier.map { _1.values_at("path", "line", "what") }
+checked = earlier.count { _1["checked"] != false }
 
 chosen.each do |site|
+  break if ENV["WHERE"] == "read" && checked >= Integer(count)
   next if done.include?(site.values_at(:path, :line, :what))
 
   row = site.slice(:path, :line, :method, :what)
-  File.binwrite(site[:path], site[:changed])
+  site[:changed] ? File.binwrite(site[:path], site[:changed]) : File.delete(site[:path])
   begin
     listed, = Bench.sh(*Bench::PITSTOP, "list", "--json")
     json = Bench.selection(listed)
     picked = json["run_all"] ? nil : Bench.selected_ids(json, map).to_set
     row[:picked] = picked ? picked.size : "all"
+    if ENV["WHERE"] == "read" && picked.nil?
+      File.write(out_path, JSON.generate(row.merge(checked: false)) + "\n", mode: "a")
+      next
+    end
+    checked += 1
+    if ENV["WHERE"] == "read"
+      # The same question with `tests_after_readers: true`: also the tests after each reader.
+      listed, = Bench.sh(Gem.ruby, File.join(__dir__, "pitstop_tests_after_readers.rb"), "list", "--json")
+      json = Bench.selection(listed)
+      strict = json["run_all"] ? nil : Bench.selected_ids(json, map).to_set
+      row[:picked_after_readers] = strict ? strict.size : "all"
+    end
     out, code, row[:run_s] = Bench.sh(*Bench::PITSTOP, "run", *tail)
     row[:run_exit] = code
     caught = failed.(out, code)
@@ -195,21 +241,26 @@ chosen.each do |site|
     full, full_code, = Bench.sh(*plain)
     broken = failed.(full, full_code)
     left_out = picked ? failing.(full).reject { picked.include?(_1) } : []
-    if broken && (!caught || left_out.any?)
+    strict_left_out = strict ? failing.(full).reject { strict.include?(_1) } : []
+    if broken && (!caught || left_out.any? || strict_left_out.any?)
       again, again_code, = Bench.sh(*plain) # once more, to rule out a test that fails now and then
       broken = failed.(again, again_code)
       left_out &= failing.(again)
+      strict_left_out &= failing.(again)
     end
     row[:failing] = broken ? failing.(full).size : 0
     row[:left_out_count] = broken ? left_out.size : 0
     row[:left_out] = broken ? left_out.first(20) : [] # the first few, by name
+    if ENV["WHERE"] == "read"
+      row[:left_out_after_readers_count] = broken ? strict_left_out.size : 0
+    end
     row[:caught_by] = if !broken then failed.(full, full_code) ? "nothing (a flaky failure)" : "nothing"
                       elsif !caught then "whole suite only"
                       elsif left_out.any? then "selection, but not every failing test"
                       else "selection"
                       end
   ensure
-    File.binwrite(site[:path], site[:source])
+    site[:source] ? File.binwrite(site[:path], site[:source]) : File.delete(site[:path])
   end
   File.write(out_path, JSON.generate(row) + "\n", mode: "a")
   puts "#{row[:path]}:#{row[:line]} #{row[:method]} (#{row[:what]}): picked #{row[:picked]}, #{row[:failing]} failing, " \
@@ -217,6 +268,9 @@ chosen.each do |site|
 end
 
 rows = File.readlines(out_path).map { JSON.parse(_1) }
+all = rows.count { _1["checked"] == false }
+puts "\n#{all} changes run everything and weren't checked further" if all.positive?
+rows = rows.reject { _1["checked"] == false }
 catchable = rows.reject { _1["caught_by"].start_with?("nothing") }
 puts "\n#{rows.size} planted bugs: #{catchable.size} caught by the whole suite, " \
      "#{catchable.count { _1['caught_by'] == 'selection' }} of those by Pitstop's selection with every failing test picked, " \

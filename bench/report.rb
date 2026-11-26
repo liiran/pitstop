@@ -56,8 +56,8 @@ def lines(name) = File.exist?(path = File.join(RESULTS, name)) ? File.readlines(
 # The commits that could be replayed, oldest first. A commit timed more than once counts with the
 # best time of each side: a machine that is busy for a moment only ever makes a run slower. When
 # Pitstop picked everything and that run was skipped, its time is the whole suite's plus the picking.
-def replay(app)
-  lines("#{app}-replay.jsonl")&.reject { _1["error"] }&.sort_by { _1["time"] }&.map do |row|
+def replay(app, file = "#{app}-replay.jsonl")
+  lines(file)&.reject { _1["error"] }&.sort_by { _1["time"] }&.map do |row|
     plain = [row["plain_s"], *row["plain_again"]].min
     run = row["run_measured"] ? [row["run_s"], *row["run_again"]].min : plain + row["pick_s"]
     # No change a test could be affected by, so only the tests that always run ran (those that
@@ -180,7 +180,42 @@ def mutants_table
   table(header, rows) unless rows.empty?
 end
 
-blocks = { "recording" => recording_table, "planted-bugs" => mutants_table, "ci" => ci_table, "stale" => stale_table }
+# Files that tests read, emptied, deleted or joined by a new file, one at a time. Each change
+# was picked for twice: as Pitstop does by default (the tests that read the file), and with
+# `tests_after_readers: true` (also the tests that ran after a reader).
+def read_files_table
+  rows = NAMES.keys.filter_map do |app|
+    list = lines("#{app}-mutants-read.jsonl") or next
+    broke = list.reject { _1["caught_by"].start_with?("nothing") }
+    failing = broke.sum { _1["failing"] }
+    picked = ->(key) { list.map { _1[key] == "all" ? Float::INFINITY : _1[key] }.then { |n| median(n) }.then { _1.infinite? ? "everything" : count(_1.round) } }
+    [NAMES[app], list.size, list.size - broke.size, broke.size, count(failing),
+     "#{count(broke.sum { _1['left_out_count'] })} of #{count(failing)}", "#{count(broke.sum { _1['left_out_after_readers_count'] })} of #{count(failing)}",
+     picked.("picked"), picked.("picked_after_readers")]
+  end
+  header = ["Files changed", "How many", "Broke no test", "Broke a test", "Tests that failed", "... left out by default",
+            "... left out with `tests_after_readers`", "Tests picked by default (median)", "... with `tests_after_readers` (median)"]
+  table(header, rows) unless rows.empty?
+end
+
+# The replayed commits again with `tests_after_readers: true`. An app without a results file of
+# its own for that setting had no commit that picks differently with it.
+def after_readers_table
+  rows = NAMES.keys.filter_map do |app|
+    usual = replay(app) or next
+    strict = replay(app, "#{app}-replay-after-readers.jsonl") || usual
+    differ = usual.zip(strict).select { |a, b| a["picked"] != b["picked"] || a["tests_run"] != b["tests_run"] }
+    total = ->(list) { before = list.sum { _1["plain_s"] }; after = list.sum { _1["run_s"] }; "#{minutes(after)} (#{percent(before - after, before)} less)" }
+    tests = ->(list) { list.empty? ? "" : list.map { count(_1["tests_run"]) }.join(", ") }
+    ["#{NAMES[app]}, #{usual.size} commits", "#{differ.size} of #{usual.size}", total.(usual), total.(strict), tests.(differ.map(&:first)), tests.(differ.map(&:last))]
+  end
+  header = ["", "Commits that pick differently", "`pitstop run`, every commit, by default", "... with `tests_after_readers`",
+            "Tests run at those commits by default", "... with `tests_after_readers`"]
+  table(header, rows) unless rows.empty?
+end
+
+blocks = { "recording" => recording_table, "planted-bugs" => mutants_table, "ci" => ci_table, "stale" => stale_table,
+           "read-files" => read_files_table, "after-readers" => after_readers_table }
 NAMES.each_key do |app|
   blocks["changes:#{app}"] = changes_table(app)
   blocks["replay:#{app}"] = replay_summary(app)
