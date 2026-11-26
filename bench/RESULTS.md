@@ -19,6 +19,11 @@ Measured in November 2026, at commits `67305be` (Fizzy), `a97adf3` (RuboCop) and
 
 ## The short version
 
+Everything on this page was measured before Pitstop started linking tests to the files they
+read (see [the README](../README.md#files-a-test-reads)). That rule only adds tests, so the
+times below are the best case for now: commits that change a file some test read or listed (a
+changelog entry, a stylesheet) will run more tests than shown. It is being measured again.
+
 - **Changing the inside of one method in a Rails app takes seconds instead of twenty.** On Fizzy,
   a change inside one controller action, template, job or model method ran 9 to 205 of the 2,708
   tests and took 3 to 8 s, where the whole suite takes 20 s.
