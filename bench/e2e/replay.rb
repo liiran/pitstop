@@ -110,6 +110,11 @@ if ENV["RETIME"] == "1"
       FileUtils.cp(parent_map, MAP)
       (i.even? ? %i[plain pitstop] : %i[pitstop plain]).each do |step|
         if step == :plain then (row["plain_again"] ||= []) << Bench.sh(*plain)[2]
+        elsif row.delete("needs_timing")
+          # reselect.rb found this commit picks fewer tests than when it was last timed: this is
+          # its first timing with the new pick.
+          out, row["run_exit"], row["run_s"] = Bench.sh(*Bench::PITSTOP, "run", *tail)
+          row.merge!("run_measured" => true, "tests_run" => Bench.pitstop_ran(out).to_i)
         elsif row["run_measured"] then (row["run_again"] ||= []) << Bench.sh(*Bench::PITSTOP, "run", *tail)[2]
         end
       end

@@ -3,13 +3,13 @@
   "by_map_age": {
     "1": {
       "commits": 8,
-      "ran_everything": 7,
-      "mean_share_of_test_time": 89.6
+      "ran_everything": 5,
+      "mean_share_of_test_time": 73.5
     },
     "2": {
       "commits": 7,
-      "ran_everything": 7,
-      "mean_share_of_test_time": 100.0
+      "ran_everything": 6,
+      "mean_share_of_test_time": 88.8
     },
     "3": {
       "commits": 6,

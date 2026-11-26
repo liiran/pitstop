@@ -2,23 +2,23 @@
   "app": "fizzy",
   "by_map_age": {
     "1": {
-      "commits": 30,
-      "ran_everything": 18,
-      "mean_share_of_test_time": 60.5
+      "commits": 29,
+      "ran_everything": 16,
+      "mean_share_of_test_time": 55.8
     },
     "2": {
-      "commits": 29,
-      "ran_everything": 25,
-      "mean_share_of_test_time": 86.3
+      "commits": 28,
+      "ran_everything": 23,
+      "mean_share_of_test_time": 82.6
     },
     "3": {
-      "commits": 28,
-      "ran_everything": 26,
-      "mean_share_of_test_time": 92.9
+      "commits": 27,
+      "ran_everything": 25,
+      "mean_share_of_test_time": 92.6
     },
     "5": {
-      "commits": 26,
-      "ran_everything": 26,
+      "commits": 25,
+      "ran_everything": 25,
       "mean_share_of_test_time": 100.0
     },
     "10": {

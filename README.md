@@ -31,12 +31,12 @@ app with 2,708 tests whose whole suite takes 20 seconds:
 | A constant, or a settings file | all 2,708 | 20.3 s | 20.7 s |
 
 Real commits are not all changes inside one method, so the saving over a project's history is
-much smaller. Replaying Fizzy's last 29 commits one by one, `pitstop run` took 6.8 minutes in
-all where the whole suite each time took 10.5 (35% less): 7 commits changed nothing a test can
-be affected by, 5 ran between 9 and 132 tests, and 17 ran everything. Ten of those 17 were
-library updates, and five changed code that runs when a file loads (see
-[below](#code-that-runs-when-a-file-loads)). Over RuboCop's last 8 commits it took 23.9 minutes
-where the whole suite took 26.5 (10% less), because 7 of the 8 added a method.
+much smaller. Replaying Fizzy's last 29 commits one by one, `pitstop run` took 6.6 minutes in
+all where the whole suite each time took 10.4 (37% less): 7 commits changed nothing a test can
+be affected by, 6 ran between 9 and 132 tests, and 16 ran everything. Ten of those 16 were
+library updates, and four changed code that runs when a file loads (see
+[below](#code-that-runs-when-a-file-loads)). Over RuboCop's last 8 commits it took 19.3 minutes
+where the whole suite took 26.3 (27% less): 5 of the 8 ran everything, for the same reason.
 
 To check that nothing gets missed, 92 small bugs were planted one at a time, 52 inside methods
 and 40 outside them. The whole suites caught 70 of them, and `pitstop run` failed for every one
@@ -46,11 +46,11 @@ left out.
 What it costs, and where it doesn't help:
 
 - **Recording the map takes 1.2 to 1.7 times a normal run**, and it has to be redone at every
-  merge: on Fizzy, a map three commits old ran everything at 26 of 28 commits.
+  merge: on Fizzy, a map three commits old ran everything at 25 of 27 commits.
 - **A suite whose time goes to a few broad, slow tests gains little.** A small gem whose tests
   start whole Rails apps gained nothing.
 - **In CI the recording on the main branch has to be earned back.** On Fizzy a pull request
-  came out ahead from its third test run, on RuboCop from its fifth.
+  came out ahead from its third test run, on RuboCop from its second.
 
 How this was measured, every number, and what the numbers don't show:
 [bench/RESULTS.md](bench/RESULTS.md).
