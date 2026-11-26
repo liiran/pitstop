@@ -185,15 +185,19 @@ end
 # `tests_after_readers: true` (also the tests that ran after a reader).
 def read_files_table
   rows = NAMES.keys.filter_map do |app|
-    list = lines("#{app}-mutants-read.jsonl") or next
+    tried = lines("#{app}-mutants-read.jsonl") or next
+    # Where Pitstop ran everything no test can be left out: those were counted and not checked.
+    list = tried.reject { _1["checked"] == false }
+    next if list.empty?
+
     broke = list.reject { _1["caught_by"].start_with?("nothing") }
     failing = broke.sum { _1["failing"] }
     picked = ->(key) { list.map { _1[key] == "all" ? Float::INFINITY : _1[key] }.then { |n| median(n) }.then { _1.infinite? ? "everything" : count(_1.round) } }
-    [NAMES[app], list.size, list.size - broke.size, broke.size, count(failing),
+    [NAMES[app], tried.size - list.size, list.size, list.size - broke.size, broke.size, count(failing),
      "#{count(broke.sum { _1['left_out_count'] })} of #{count(failing)}", "#{count(broke.sum { _1['left_out_after_readers_count'] })} of #{count(failing)}",
      picked.("picked"), picked.("picked_after_readers")]
   end
-  header = ["Files changed", "How many", "Broke no test", "Broke a test", "Tests that failed", "... left out by default",
+  header = ["Files changed", "Ran everything (not checked)", "Ran some tests (checked)", "... broke no test", "... broke a test", "Tests that failed", "... left out by default",
             "... left out with `tests_after_readers`", "Tests picked by default (median)", "... with `tests_after_readers` (median)"]
   table(header, rows) unless rows.empty?
 end

@@ -4,12 +4,12 @@
     "1": {
       "commits": 8,
       "ran_everything": 5,
-      "mean_share_of_test_time": 73.5
+      "mean_share_of_test_time": 76.3
     },
     "2": {
       "commits": 7,
       "ran_everything": 6,
-      "mean_share_of_test_time": 88.8
+      "mean_share_of_test_time": 90.5
     },
     "3": {
       "commits": 6,

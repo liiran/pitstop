@@ -1,5 +1,6 @@
 # label | path | text to replace | replacement | expected
 docs only (only the always-run skipped tests) | README.md | (append) | \nOne more line.\n | pass
+stylesheet (the tests that read it) | app/assets/stylesheets/search.css | (append) | \n/* One more line. */\n | pass
 comment only (the same always-run tests) | app/models/card/closeable.rb |   def closed? |   # Closed once a closure exists.\n  def closed? | pass
 planted bug in a lambda scope | app/models/card/golden.rb | scope :golden, -> { joins(:goldness) } | scope :golden, -> { left_outer_joins(:goldness) } | fail
 test file | test/models/card/closeable_test.rb |   setup do |   setup do\n    # same setup | pass
