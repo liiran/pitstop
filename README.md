@@ -40,10 +40,22 @@ library updates, and four changed code that runs when a file loads (see
 where the whole suite took 26.0 (22% less): 5 of the 8 ran everything, for the same reason.
 
 To check that nothing gets missed, 92 small bugs were planted one at a time, 52 inside methods
-and 40 outside them. The whole suites caught 70 of them, and `pitstop run` failed for every one
-of those. For the 40 outside methods every failing test was checked, 6,761 in all, and none was
-left out. Files that tests read were changed too, 52 of them one at a time: the changes broke
-35 tests, and all 35 were among the ones picked.
+and 40 outside them. For each one, the whole suite ran and `pitstop run` ran:
+
+| | Bugs |
+|---|---|
+| Planted | 92 |
+| No test notices the bug: the whole suite passes with it too | 22 |
+| The whole suite fails | 70 |
+| ... and `pitstop run` fails as well | 70 of 70 |
+
+The 22 are gaps in the projects' own tests, and say nothing about Pitstop. For the 40 bugs
+outside methods the check went one step further: every test the whole suite failed, 6,761 in
+all, had to be among the tests Pitstop picked. Every one was.
+
+Files that tests read were changed the same way, 52 of them one at a time (emptied, deleted or
+added). Seven of those changes made tests fail, 35 tests in all, and all 35 were among the ones
+Pitstop picked.
 
 What it costs, and where it doesn't help:
 
