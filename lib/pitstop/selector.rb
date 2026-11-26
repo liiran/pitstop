@@ -38,7 +38,7 @@ module Pitstop
       @run_all = nil
 
       @changes.each { consider(_1) }
-      @map.dirty.each { |path| with_openers(path, "?") { dirty_file(path) } }
+      @map.dirty.each { |path| path.include?(Git::UNREADABLE) ? unreadable(path) : with_openers(path, "?") { dirty_file(path) } }
       unfinished = @map.tests.select(&:failed?).map(&:index)
       note(nil, "didn't pass when the map was made", unfinished) unless unfinished.empty?
 
@@ -53,6 +53,8 @@ module Pitstop
     end
 
     def consider_path(path, status)
+      return unreadable(path) if path.include?(Git::UNREADABLE)
+
       verdict = @rules.classify(path)
       return outside(path, verdict) if path.start_with?("../")
 
@@ -67,6 +69,12 @@ module Pitstop
         else other_file(path, status, verdict)
         end
       end
+    end
+
+    # A file whose name isn't valid UTF-8 text. Nothing recorded can be matched with it, so no
+    # rule about it could be trusted.
+    def unreadable(path)
+      run_all(path, "its name isn't valid UTF-8 text, so Pitstop can't look it up")
     end
 
     # Whatever the rules above say about a file, a test can depend on it without running a line

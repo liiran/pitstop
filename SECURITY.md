@@ -28,8 +28,12 @@ what changed.
 ## What counts as a security problem
 
 - Pitstop running a command, or loading a file, that the project's test command wouldn't.
-- Pitstop writing outside the project's `.pitstop/` folder.
+- Pitstop writing outside the project's `.pitstop/` folder. (A `.pitstop` that is a link to
+  another place is refused.)
 - A map or settings file making Pitstop do anything other than pick tests.
+- A map holding something the README says it doesn't: a path from outside the project, what a
+  file says, an environment variable.
+- Recording changing what a test does or sees, beyond what the README lists.
 - Pitstop sending anything over the network (it has no code that does).
 
 A wrong pick (a test that should have run and didn't) is a bug, not a security problem, unless

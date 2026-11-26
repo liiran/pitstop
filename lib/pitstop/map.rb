@@ -255,9 +255,10 @@ module Pitstop
       numbers = ->(list) { list.is_a?(Array) && list.all? { _1.is_a?(Integer) && _1 >= 0 && _1 < tests } }
       names = ->(list) { list.is_a?(Array) && list.all? { _1.is_a?(String) && !_1.include?("\0") } }
       by_test = ->(table) { table.is_a?(Hash) && table.all? { |key, list| names.([key]) && numbers.(list) } }
+      files = ->(table) { by_test.(table) && table.each_key.all? { inside?(_1) } }
       by_file = ->(table) { table.is_a?(Hash) && table.all? { |file, list| inside?(file) && names.(list) } }
       order.is_a?(Array) && order.all?(&numbers) && opened.is_a?(Hash) &&
-        by_test.(opened["reads"]) && by_test.(opened["lists"]) && names.(opened["boot_reads"]) && names.(opened["boot_lists"]) &&
+        files.(opened["reads"]) && by_test.(opened["lists"]) && names.(opened["boot_reads"]) && names.(opened["boot_lists"]) &&
         by_file.(opened["file_reads"]) && by_file.(opened["file_lists"])
     end
 

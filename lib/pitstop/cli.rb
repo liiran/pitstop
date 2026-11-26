@@ -75,7 +75,15 @@ module Pitstop
     # Everything Pitstop writes goes in .pitstop/, which keeps itself out of git: a map is made
     # for one commit on one machine's checkout, and is not meant to be committed by accident.
     def make_pitstop_dir
+      # A repository can contain a link named .pitstop. Following it would put the map, and the
+      # working folders Pitstop deletes afterwards, wherever the link points.
+      [pitstop_dir, File.join(pitstop_dir, "runs")].each do |dir|
+        next unless File.symlink?(dir)
+
+        raise ArgumentError, "#{relative(dir)} is a link to another place, and Pitstop only writes inside the project. Remove the link and run this again."
+      end
       return if Dir.exist?(pitstop_dir)
+      raise ArgumentError, ".pitstop is a file, and Pitstop needs a folder of that name. Remove or rename the file." if File.exist?(pitstop_dir)
 
       Dir.mkdir(pitstop_dir)
       File.write(File.join(pitstop_dir, ".gitignore"), "*\n")
@@ -103,7 +111,15 @@ module Pitstop
           "#{" (#{failed} didn't pass; they'll always run)" if failed.positive?}. Saved #{relative(map_path)}")
       ok ? 0 : 1
     ensure
-      FileUtils.rm_rf(run_dir) if run_dir && ENV["PITSTOP_KEEP_RUNS"] != "1"
+      if run_dir && ENV["PITSTOP_KEEP_RUNS"] != "1"
+        FileUtils.rm_rf(run_dir)
+        # The folder the working files were in, unless another recording is using it.
+        begin
+          Dir.rmdir(File.dirname(run_dir))
+        rescue SystemCallError
+          nil
+        end
+      end
     end
 
     # --- list ------------------------------------------------------------------------------------

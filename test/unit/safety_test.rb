@@ -118,8 +118,7 @@ class SafetyTest < Minitest::Test
       shop.git("checkout", "--", ".")
 
       after = Dir.glob("**/*", File::FNM_DOTMATCH, base: shop.dir).reject { _1.start_with?(".git/") }.to_set
-      added = (after - before).reject { File.directory?(File.join(shop.dir, _1)) }
-      assert_equal %w[.pitstop/.gitignore .pitstop/map.json.gz], added.sort, "only the map, and the file that keeps it out of git"
+      assert_equal %w[.pitstop .pitstop/.gitignore .pitstop/map.json.gz], (after - before).sort, "only the map, and the file that keeps it out of git"
       assert_empty shop.git("status", "--porcelain", "--untracked-files=all")
     end
   end
@@ -205,6 +204,7 @@ class SafetyTest < Minitest::Test
         "a reader that isn't one of the tests" => good.merge("opened" => good["opened"].merge("reads" => { "docs/a.md" => [99] })),
         "a test file above the project, to run whole" => good.merge("opened" => good["opened"].merge("file_reads" => { "../x_test.rb" => ["docs/a.md"] })),
         "an order of tests that don't exist" => good.merge("order" => [[0, 99]]),
+        "a file read from above the project" => good.merge("opened" => good["opened"].merge("reads" => { "../../etc/passwd" => [0] })),
         "a list instead of a map" => [1, 2, 3]
       }
       made_up.each do |name, data|
@@ -501,6 +501,127 @@ class SafetyTest < Minitest::Test
       assert_match "Pitstop: ran 1 of 1 selected tests", out
       assert_equal "run", shop.read("mode.txt")
       assert Dir.exist?(File.join(shop.dir, "coverage")), "SimpleCov ran as usual:\n#{out}#{err}"
+      assert_equal 0, code, out + err
+    end
+  end
+
+  # --- what recording leaves in the map, and does to the tests -----------------------------------
+
+  # A map is handed around (CI gives the main branch's to every pull request), so what a test
+  # merely asked about shouldn't put a path from elsewhere on the disk into it, or what a file
+  # says. The name of a project file a test read is kept: that is how a change to it finds the test.
+  def test_what_a_test_looks_at_puts_no_outside_paths_or_file_contents_in_the_map
+    Dir.mktmpdir do |elsewhere|
+      elsewhere = File.realpath(elsewhere)
+      File.write(File.join(elsewhere, "notes.txt"), "from elsewhere\n")
+      test = <<~RUBY
+        require_relative "test_helper"
+        class LooksAroundTest < Minitest::Test
+          def test_looks_around
+            File.exist?("(eval at #{elsewhere}/gems/thing.rb:13)") # the name Ruby gives eval'd code
+            File.exist?("<STDOUT>")
+            File.read(#{File.join(elsewhere, 'notes.txt').inspect})
+            Dir.glob(#{File.join(elsewhere, '*').inspect})
+            Dir.children(Dir.home)
+            assert_equal "KEY=not-for-the-map", File.read(File.expand_path("../.env", __dir__)).strip
+          end
+        end
+      RUBY
+      Fixture.project(Shop::FILES.merge("test/looks_around_test.rb" => test, ".env" => "KEY=not-for-the-map\n")) do |shop|
+        shop.commit("start")
+        code, out, err = shop.pitstop("record")
+        assert_equal 0, code, out + err
+        written = JSON.generate(shop.map)
+        [shop.dir, elsewhere, Dir.home, "eval at", "STDOUT", "not-for-the-map"].each { refute_includes written, _1 }
+        assert_includes shop.map.dig("opened", "reads").keys, ".env"
+      end
+    end
+  end
+
+  # Recording puts methods of its own in front of File's and Dir's. A method made from a block
+  # can't be called from another Ractor, so these mustn't be.
+  def test_a_test_that_reads_files_in_another_ractor_passes_while_recording
+    test = <<~RUBY
+      require_relative "test_helper"
+      class RactorTest < Minitest::Test
+        def test_reads_in_a_ractor
+          ractor = Ractor.new(File.expand_path("../README.md", __dir__)) do |path|
+            [File.exist?(path), File.read(path).strip, Dir.children(File.dirname(path)).include?("README.md"), Object.instance_methods.size > 10]
+          end
+          assert_equal [true, "# Shop", true, true], ractor.respond_to?(:value) ? ractor.value : ractor.take
+        end
+      end
+    RUBY
+    Fixture.project(Shop::FILES.merge("test/ractor_test.rb" => test)) do |shop|
+      shop.commit("start")
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      assert_match(/ 0 failures, 0 errors/, out)
+    end
+  end
+
+  # A test may look at where an error came from. With a method of Pitstop's in front of
+  # File.read, the error would seem to come from Pitstop.
+  def test_an_error_from_a_file_method_still_points_at_the_code_that_called_it
+    skip "Ruby can't take a frame out of a trace before 3.4" if RUBY_VERSION < "3.4"
+    test = <<~'RUBY'
+      require_relative "test_helper"
+      class TraceTest < Minitest::Test
+        def test_a_missing_file
+          error = assert_raises(Errno::ENOENT) { File.read("no/such/file.txt") }
+          assert_equal __FILE__, error.backtrace_locations.first.path
+          assert_empty error.backtrace.grep(/in front of a built-in method/)
+        end
+      end
+    RUBY
+    Fixture.project(Shop::FILES.merge("test/trace_test.rb" => test)) do |shop|
+      shop.commit("start")
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      assert_match(/ 0 failures, 0 errors/, out)
+    end
+  end
+
+  # A repository can contain a link named .pitstop. Following it would put the map, and the
+  # working folders Pitstop deletes afterwards, wherever it points.
+  def test_a_link_named_dot_pitstop_is_refused_and_nothing_is_written_through_it
+    Dir.mktmpdir do |elsewhere|
+      File.write(File.join(elsewhere, "precious.txt"), "keep")
+      Fixture.project(Shop::FILES) do |shop|
+        shop.commit("start")
+        begin
+          File.symlink(elsewhere, File.join(shop.dir, ".pitstop"))
+        rescue NotImplementedError, SystemCallError
+          skip "links can't be made here"
+        end
+        code, _, err = shop.pitstop("record")
+        assert_equal 64, code, err
+        assert_plain_error err, /\.pitstop is a link to another place/
+        assert_equal ["precious.txt"], Dir.children(elsewhere)
+
+        # The same for the folder inside it that working files go in.
+        File.delete(File.join(shop.dir, ".pitstop"))
+        Dir.mkdir(File.join(shop.dir, ".pitstop"))
+        File.symlink(elsewhere, File.join(shop.dir, ".pitstop", "runs"))
+        code, _, err = shop.pitstop("record")
+        assert_equal 64, code, err
+        assert_equal ["precious.txt"], Dir.children(elsewhere)
+      end
+    end
+  end
+
+  # A file's name is whatever bytes its author chose. One that isn't valid UTF-8 can't be
+  # matched against anything recorded, so the safe answer is everything, not a refusal to run.
+  def test_a_changed_file_whose_name_is_not_utf8_runs_everything
+    Shop.recorded do |shop|
+      begin
+        File.binwrite(File.join(shop.dir.b, "docs-\xFF\xFE.md".b), "text\n")
+      rescue SystemCallError
+        skip "this file system only takes names that are valid text"
+      end
+      selection = shop.selection
+      assert selection["run_all"], selection.inspect
+      code, out, err = shop.pitstop("run")
       assert_equal 0, code, out + err
     end
   end

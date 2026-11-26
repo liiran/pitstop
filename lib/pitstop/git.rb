@@ -10,6 +10,8 @@ module Pitstop
   #   backend/app/models/cart.rb   →  app/models/cart.rb
   #   frontend/src/app.js          →  ../frontend/src/app.js
   class Git
+    UNREADABLE = "\uFFFD".freeze
+
     Change = Struct.new(:status, :path, :old_path, keyword_init: true) do
       def added? = status == "A"
       def deleted? = status == "D"
@@ -48,7 +50,7 @@ module Pitstop
 
     # Paths with uncommitted changes (including untracked files).
     def dirty_paths
-      fields = run("status", "--porcelain", "-z", "--untracked-files=all").split("\0")
+      fields = names(run("status", "--porcelain", "-z", "--untracked-files=all"))
       paths = []
       until fields.empty?
         entry = fields.shift
@@ -61,7 +63,7 @@ module Pitstop
     # Everything that differs between `base` and the working tree, plus untracked files.
     def changes_since(base)
       check(base)
-      fields = run("diff", "--name-status", "-z", "-M", base, "--").split("\0")
+      fields = names(run("diff", "--name-status", "-z", "-M", base, "--"))
       changes = []
       until fields.empty?
         status = fields.shift
@@ -73,7 +75,7 @@ module Pitstop
         end
       end
       # `:/` is the whole repository, not only the folder git was started in.
-      run("ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/").split("\0").each do |path|
+      names(run("ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/")).each do |path|
         changes << Change.new(status: "A", path: project_path(path))
       end
       changes
@@ -116,6 +118,16 @@ module Pitstop
 
     def check(sha)
       raise Error, "#{sha.inspect} isn't a commit id" unless COMMIT.match?(sha.to_s)
+    end
+
+    # The parts of git's zero-separated output. A file's name is whatever bytes its author
+    # chose. One that isn't valid UTF-8 can't be looked up, matched against a pattern or
+    # written into a map, so its odd bytes become U+FFFD, which marks it (see UNREADABLE).
+    def names(output)
+      output.b.split("\0".b).map do |name|
+        name.force_encoding(Encoding::UTF_8)
+        name.valid_encoding? ? name : name.scrub(UNREADABLE)
+      end
     end
 
     def run(*args)

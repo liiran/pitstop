@@ -355,4 +355,11 @@ class SelectorTest < Minitest::Test
     assert_equal ["test/carts_controller_test.rb"], s.files.to_a
     assert_equal %w[CartsControllerTest#test_show], ids(s)
   end
+
+  # Git hands over a name that isn't valid UTF-8 with U+FFFD where the odd bytes were. Nothing
+  # recorded can be matched with such a name, so no rule about it can be trusted.
+  def test_a_file_name_that_is_not_valid_text_runs_everything
+    assert select([["A", "docs/caf�.md"]]).all?
+    assert select([["R", "docs/plain.md", "docs/caf�.md"]]).all?
+  end
 end

@@ -69,6 +69,23 @@ What it costs, and where it doesn't help:
 How this was measured, every number, and what the numbers don't show:
 [bench/RESULTS.md](bench/RESULTS.md).
 
+## Install
+
+Pitstop isn't published on RubyGems (so `gem install pitstop` would not get you this
+project). Install it from a clone:
+
+```sh
+git clone https://github.com/liiran/pitstop
+cd pitstop
+gem build pitstop.gemspec
+gem install ./pitstop-*.gem
+```
+
+That gives you the `pitstop` command. It needs Ruby 3.2 or newer and git. Its one dependency,
+Prism, is installed with it. Pitstop doesn't go in your project's `Gemfile`: it starts your
+test command from outside, and what it loads into the test process uses nothing but Ruby's
+own libraries.
+
 ## How to use it
 
 ```sh
@@ -324,8 +341,15 @@ What Pitstop does on your machine, so you can decide where to use it:
   anywhere.
 - **It writes only inside `.pitstop/`** in your project: the map, and working files it removes
   when a run ends. `.pitstop/` keeps itself out of git.
-- **The map holds** test names, file paths inside the project, line numbers and a commit id.
-  It holds no source code, no environment variables and no paths from outside the project.
+- **The map holds** these, and nothing else:
+  - test names, file paths inside the project, line numbers, a commit id and the order the
+    tests ran in;
+  - the names of project files your tests read or looked for, and the patterns they listed
+    folders with. Names only: `.env` can appear in a map if a test read it, what it says can't;
+  - the names of methods (your code's, your gems' and Ruby's) and of your project's classes.
+
+  It holds no source code, no file contents, no environment variables and no paths from
+  outside the project.
 - **The map and `.pitstop.yml` are read as plain data** and checked before use. A map that isn't
   one Pitstop wrote is refused.
 - **`pitstop list` runs no project code.** It reads the map and asks git what changed.
@@ -335,6 +359,17 @@ What Pitstop does on your machine, so you can decide where to use it:
 `pitstop record` and `pitstop run` load a small file into the test process through `RUBYOPT`, and
 every Ruby process your tests start inherits it. In a process run by an older Ruby, or by JRuby,
 it does nothing.
+
+While recording (not during `pitstop run`), that file also puts small methods of its own in
+front of Ruby's file methods (`File.read`, `File.exist?`, `Dir.glob` and the like) and its
+method listings (`instance_methods`, `methods`), to note what your tests read. They hand every
+call on unchanged and give back what Ruby gives back. What a test could still notice:
+
+- those methods report a different `arity`, and `File`, `Dir` and `Module` gain private methods
+  named `__pitstop_…`;
+- on Ruby before 3.4, an error raised by one of them (`File.read` of a missing file) has one
+  extra line at the top of its trace;
+- code that runs in another Ractor works as usual, but what it reads isn't noted.
 
 To report a security problem, see [SECURITY.md](SECURITY.md).
 
@@ -353,6 +388,11 @@ gem install --install-dir tmp/gems minitest:6.1.0 minitest:5.27.0 rspec activesu
 
 Anything that forks (Rails' parallel workers, a test that forks) is tested on Linux; on Windows
 those tests skip. `compose.yaml` has a Linux environment.
+
+Three environment variables exist for working on Pitstop itself, and none is needed to use it:
+`PITSTOP_KEEP_RUNS=1` keeps the working files of a recording in `.pitstop/runs/`,
+`PITSTOP_GRANULARITY=test` or `file` fixes how often coverage is read while recording, and
+`PITSTOP_EAGER_LOAD=0` stops a recording from loading a Rails app's code up front.
 
 `bench/` holds the scripts that run Pitstop on real apps (one change at a time, their real
 commits replayed, planted bugs), the numbers they produced (`bench/results/`) and the page

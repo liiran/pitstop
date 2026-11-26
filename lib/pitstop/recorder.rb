@@ -80,6 +80,13 @@ module Pitstop
     TEST_FILE = %r{\A(test|spec)/.*_(test|spec)\.rb\z}
     GLOB_SIGNS = /[\\*?\[\]{}]/
     UNTIDY = %r{/\.{0,2}(/|\z)} # "//", "/./", "/../", or a slash at the end
+    # Names Ruby gives to code that has no file ("(eval at /gems/x.rb:3)", "<STDOUT>"): asked about
+    # as if they were files in the current folder, and they can carry a path from elsewhere.
+    NOT_A_FILE = %r{\A\((eval|erb|irb|pry|haml|slim)\b|\A<[^/]*>\z|[( ]/|[( ][A-Za-z]:[/\\]}
+    # The file name the methods put in front of built-in ones are filed under, so their frames
+    # can be told apart (see Record.unframe).
+    CLEAN_TRACES = RUBY_VERSION >= "3.4"
+    HOOK = (CLEAN_TRACES ? "#{__FILE__} (in front of a built-in method)" : __FILE__).freeze
 
     class << self
       # Coverage since the last read, kept only for project files, as {path => [[first, last], ...]}
@@ -145,21 +152,54 @@ module Pitstop
       end
 
       # --- files read and folders looked into ----------------------------------------------------
+      #
+      # The four methods below are what the methods put in front of File, IO and Dir call (see
+      # `watch_files`). Noting must never change what the app's own call does, so whatever goes
+      # wrong in one of them is swallowed. That includes being called from another Ractor, where
+      # the recorder's own state can't be reached.
 
       # Before the tests start, it matters which code asked: see #opened.
       def loading? = !@booted && !@test && !child?
 
+      # The code that asked, while test files are still loading: [3] is the caller of the built-in
+      # method (this is called by a note, which is called by the method put in front).
+      def asker = loading? ? caller_locations(3, 25) : nil
+
       # Some code opened this file, or asked something only its contents can answer (its size, when
-      # it last changed). `called_from`: the code that asked, while test files are still loading.
-      def file_read(path, called_from = nil)
-        relative = project_data(path) and opened(:reads, relative, called_from)
+      # it last changed).
+      def file_read(path)
+        from = asker
+        relative = project_data(path) and opened(:reads, relative, from)
       rescue StandardError
-        nil # noting must never change what the app's own call does
+        nil
       end
 
-      # Some code asked which files exist: `Dir["changelog/*.md"]`, `Dir.children("docs")`. What it
-      # depends on is the pattern, since a file added later that matches it changes the answer.
-      def files_listed(patterns, base = nil, called_from = nil)
+      # Some code asked which files exist: `Dir["changelog/*.md"]`. What it depends on is the
+      # pattern, since a file added later that matches it changes the answer.
+      def files_listed(patterns, base = nil)
+        patterns_asked(patterns, base, asker)
+      rescue StandardError
+        nil
+      end
+
+      # Some code asked what is in a folder: `Dir.children("docs")`.
+      def folder_listed(folder)
+        from = asker
+        folder = folder.to_path if !folder.is_a?(String) && folder.respond_to?(:to_path)
+        patterns_asked(File.join(folder, "*"), nil, from) if folder.is_a?(String)
+      rescue StandardError
+        nil
+      end
+
+      # Some code asked whether this one file or folder exists: a pattern that only it matches.
+      def existence_asked(path)
+        from = asker
+        relative = project_data(path) and opened(:lists, relative.gsub(GLOB_SIGNS) { "\\#{_1}" }, from)
+      rescue StandardError
+        nil
+      end
+
+      def patterns_asked(patterns, base, called_from)
         Array(patterns).each do |pattern|
           pattern = pattern.to_path if !pattern.is_a?(String) && pattern.respond_to?(:to_path)
           next unless pattern.is_a?(String)
@@ -172,6 +212,16 @@ module Pitstop
 
           choices.each { |choice| relative = project_data(choice, base) and opened(:lists, relative, called_from) }
         end
+      end
+
+      # An error that passed through a method put in front of a built-in one shouldn't show that
+      # method in its trace: a test may look at where an error came from. Ruby can drop frames
+      # from a trace and keep the rest as it was from 3.4 on; before that the frame stays.
+      def unframe(error)
+        return unless CLEAN_TRACES
+
+        locations = error.backtrace_locations
+        error.set_backtrace(locations.reject { _1.path == HOOK }) if locations&.any? { _1.path == HOOK }
       rescue StandardError
         nil
       end
@@ -207,13 +257,6 @@ module Pitstop
         [pattern]
       end
 
-      # Some code asked whether this one file or folder exists: a pattern that only it matches.
-      def existence_asked(path, called_from = nil)
-        relative = project_data(path) and opened(:lists, relative.gsub(GLOB_SIGNS) { "\\#{_1}" }, called_from)
-      rescue StandardError
-        nil
-      end
-
       # The path inside the project, for a file (or pattern) that is part of it; nil for anything
       # else: files outside it, logs and databases the suite itself writes, things that aren't paths.
       def project_data(path, base = nil)
@@ -223,10 +266,12 @@ module Pitstop
         # A plain path under the project is used as it is; anything else ("a//b", "a/../b", a path
         # from the current folder) is first made into one.
         full = !base && path.start_with?(PREFIX) && !path.match?(UNTIDY) ? path : File.expand_path(path, *base)
-        return unless in_project?(full)
+        # Not #in_project?, which remembers every path it was asked about: this is asked about
+        # every file the tests touch.
+        return unless full.start_with?(PREFIX) || (WINDOWS && full.size > PREFIX.size && full[0, PREFIX.size].casecmp?(PREFIX))
 
         relative = full[PREFIX.size..]
-        relative unless relative.empty? || relative.match?(NOT_PROJECT_DATA)
+        relative unless relative.empty? || relative.match?(NOT_PROJECT_DATA) || relative.match?(NOT_A_FILE)
       end
 
       # Where a read or a listing belongs. In a test (or between two): to the next record written,
@@ -261,6 +306,17 @@ module Pitstop
       # `on_send`, `on_def`... because they show up in `public_instance_methods`.
       def listed(mod, side)
         @listed[side][mod] = true
+      rescue StandardError
+        nil # from another Ractor, where this can't be reached
+      end
+
+      # `Cart.methods` lists the class's own methods, `cart.methods` those of a Cart.
+      def listed_on(object, private_ones)
+        if Module === object then listed(object, private_ones ? :private_class_side : :class_side)
+        else listed(CLASS_OF.bind_call(object), private_ones ? :private_instance : :instance)
+        end
+      rescue StandardError
+        nil
       end
 
       # Written by every process as it ends, for `pitstop run` to judge a method that gets added
@@ -686,85 +742,75 @@ module Pitstop
       end
     end
 
-    # Notes who asks for a list of methods, then answers as Ruby would. The methods are replaced
-    # in place, not through a module put in front of Module or Kernel: that would show up in
-    # every class's `ancestors`, which a project's own tests may look at.
+    # Puts a note in front of a built-in method, in place: the method keeps its name and its place,
+    # and the original stays reachable under a private name beside it. Not through a module put
+    # in front of the class, which would show up in `ancestors`, something a project's own tests
+    # may look at. And written with `def`, not a block: a method made from a block can't be
+    # called from another Ractor, and tests that use Ractors read files too. (There the note is
+    # skipped: what the recorder knows lives in the main Ractor.)
+    #
+    #   owner   the class or module whose instances have the method (a singleton class for
+    #           `File.read` and the like)
+    #   note    Ruby code for the note, which can use `args`, `options` and `self`
+    def self.put_in_front(owner, name, note, keywords: true)
+      original = "__pitstop_#{name.to_s.sub('?', '_p').sub('[]', 'index')}"
+      hidden = owner.private_method_defined?(name)
+      owner.send(:alias_method, original, name)
+      owner.send(:private, original)
+      params = keywords ? "*args, **options, &block" : "*args, &block"
+      owner.class_eval(<<~RUBY, HOOK, 1)
+        def #{name}(#{params})
+          #{note}
+          #{original}(#{params})
+        rescue ::Exception => error
+          ::Pitstop::Record.unframe(error)
+          ::Kernel.raise
+        end
+      RUBY
+      owner.send(:private, name) if hidden
+    end
+
+    # Notes who asks for a list of methods, then answers as Ruby would.
     def self.watch_listing
       quiet, $VERBOSE = $VERBOSE, nil # replacing a built-in method is meant here
       { instance_methods: :instance, public_instance_methods: :instance, protected_instance_methods: :instance,
         private_instance_methods: :private_instance }.each do |name, side|
-        original = LISTING.fetch(name)
-        Module.define_method(name) do |*args|
-          Pitstop::Record.listed(self, side)
-          original.bind_call(self, *args)
-        end
+        put_in_front(Module, name, "::Pitstop::Record.listed(self, :#{side})", keywords: false)
       end
       { methods: false, public_methods: false, singleton_methods: false, private_methods: true }.each do |name, private_ones|
-        original = LISTING_OBJECT.fetch(name)
-        Kernel.define_method(name) do |*args|
-          # `Cart.methods` lists the class's own methods, `cart.methods` those of a Cart.
-          if Module === self then Pitstop::Record.listed(self, private_ones ? :private_class_side : :class_side)
-          else Pitstop::Record.listed(CLASS_OF.bind_call(self), private_ones ? :private_instance : :instance)
-          end
-          original.bind_call(self, *args)
-        end
+        put_in_front(Kernel, name, "::Pitstop::Record.listed_on(self, #{private_ones})", keywords: false)
       end
     ensure
       $VERBOSE = quiet
     end
 
     # Notes which files get read and which folders get looked into, then does what Ruby would.
-    # Replaced in place, like the method listings above. What this can't see is in the README:
-    # a file opened by a program the test starts that isn't Ruby, or by a gem's C code.
+    # What this can't see is in the README: a file opened by a program the test starts that
+    # isn't Ruby, or by a gem's C code.
     def self.watch_files
       quiet, $VERBOSE = $VERBOSE, nil
-      # The code that asked, while test files are still loading (see Record.opened).
-      from = -> { Pitstop::Record.loading? ? caller_locations(2, 25) : nil }
-      wrap = lambda do |owner, name, &note|
-        original = owner.method(name).unbind
-        owner.define_singleton_method(name) do |*args, **options, &block|
-          note.(args, options, from.call)
-          original.bind_call(self, *args, **options, &block)
-        end
-      end
+      read = "::Pitstop::Record.file_read(args.first)"
+      asked = "::Pitstop::Record.existence_asked(args.first)"
+      folder = "::Pitstop::Record.folder_listed(args.first)"
 
       # File.open, File.new, Kernel#open and Pathname#open all make a File.
-      open_file = File.instance_method(:initialize)
-      File.define_method(:initialize) do |*args, **options, &block|
-        Pitstop::Record.file_read(args.first, from.call)
-        open_file.bind_call(self, *args, **options, &block)
-      end
-      File.send(:private, :initialize)
+      put_in_front(File, :initialize, read)
       # These read a file without making a File, or answer from its contents. `realpath` is here
       # because Bootsnap asks for it before loading a YAML or JSON file through its own C code.
-      %i[read binread readlines foreach copy_stream sysopen].each do |name|
-        wrap.(IO, name) { |args, _, asker| Pitstop::Record.file_read(args.first, asker) }
-      end
-      %i[stat lstat mtime size realpath realdirpath].each do |name|
-        wrap.(File, name) { |args, _, asker| Pitstop::Record.file_read(args.first, asker) }
-      end
+      %i[read binread readlines foreach copy_stream sysopen].each { put_in_front(IO.singleton_class, _1, read) }
+      %i[stat lstat mtime size realpath realdirpath].each { put_in_front(File.singleton_class, _1, read) }
 
       [File, FileTest].each do |owner|
         %i[exist? file? directory? readable? symlink? size? zero? empty?].each do |name|
-          next unless owner.respond_to?(name)
-
-          wrap.(owner, name) { |args, _, asker| Pitstop::Record.existence_asked(args.first, asker) }
+          put_in_front(owner.singleton_class, name, asked) if owner.respond_to?(name)
         end
       end
-      wrap.(Dir, :exist?) { |args, _, asker| Pitstop::Record.existence_asked(args.first, asker) }
+      put_in_front(Dir.singleton_class, :exist?, asked)
 
-      wrap.(Dir, :glob) { |args, options, asker| Pitstop::Record.files_listed(args.first, options[:base], asker) }
-      wrap.(Dir, :[]) { |args, options, asker| Pitstop::Record.files_listed(args, options[:base], asker) }
-      everything_in = ->(folder) { folder.is_a?(String) || folder.respond_to?(:to_path) ? File.join(folder, "*") : nil }
-      %i[children entries each_child foreach open empty?].each do |name|
-        wrap.(Dir, name) { |args, _, asker| Pitstop::Record.files_listed(everything_in.(args.first), nil, asker) }
-      end
-      open_folder = Dir.instance_method(:initialize)
-      Dir.define_method(:initialize) do |*args, **options, &block|
-        Pitstop::Record.files_listed(everything_in.(args.first), nil, from.call)
-        open_folder.bind_call(self, *args, **options, &block)
-      end
-      Dir.send(:private, :initialize)
+      put_in_front(Dir.singleton_class, :glob, "::Pitstop::Record.files_listed(args.first, options[:base])")
+      put_in_front(Dir.singleton_class, :[], "::Pitstop::Record.files_listed(args, options[:base])")
+      %i[children entries each_child foreach open empty?].each { put_in_front(Dir.singleton_class, _1, folder) }
+      put_in_front(Dir, :initialize, folder)
     ensure
       $VERBOSE = quiet
     end
