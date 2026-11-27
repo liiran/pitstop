@@ -203,6 +203,8 @@ What the workflow relies on:
   in git tells Pitstop that a library was updated there.
 - **Your tests' own setup still applies.** Add the steps they need (a database, system
   packages), and name the command if it isn't the default: `pitstop record -- bin/rails test`.
+  `ruby/setup-ruby` takes the Ruby version from your `.ruby-version` file; without one, give
+  it a `ruby-version:` line.
 
 | Exit status | Meaning |
 |---|---|
