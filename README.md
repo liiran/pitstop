@@ -92,6 +92,7 @@ own libraries.
 pitstop record          # run every test once, noting which code each test runs (the "map")
 pitstop list --explain  # which tests your changes since then can affect, and why
 pitstop run             # run only those
+pitstop status          # how far your code has moved from the map, and what a run would do now
 ```
 
 Record on your main branch (in CI, or once in a while locally), then `pitstop run` as you work.
@@ -101,23 +102,114 @@ changes count the same.
 The test command is `bin/rails test`, `bundle exec rspec` (a project with `spec/` and no `test/`) or
 `bundle exec rake test`. Pick another with `pitstop record -- <command>`, or in `.pitstop.yml`.
 
+`pitstop status` runs nothing. It answers "is my map still good?" in three lines:
+
+```
+$ pitstop status
+Map: of commit a1b2c3d (committed 2026-11-24, 3 days ago), 2184 tests
+Your code: 2 commits past the map's, 5 files changed (1 not committed)
+Next `pitstop run`: 41 of 2184 tests (1.9%)
+```
+
+When the last line says `all 2184 tests`, it gives the file and the reason, and recording
+again at your current commit is what brings the short runs back.
+
 ### In CI
 
 - **On your main branch:** run `pitstop record` instead of the plain test command. It runs every
   test (so main is always fully tested) and leaves `.pitstop/map.json.gz`. Keep that file for
   other jobs, as a cache or an artifact.
-- **On a pull request:** fetch main's map into `.pitstop/`, then `pitstop run`. With no map there,
-  run your normal test command instead.
+- **On a pull request:** fetch main's map into `.pitstop/`, then `pitstop run --all-without-map`.
+  With a map it runs the tests the change can affect. With none it can use (the first run, a
+  cache that expired, a map from another version of Pitstop) it runs every test and says why.
+  Without the flag, `pitstop run` stops with an error when there is no map.
 
 The pull request's checkout needs the commit the map was made at (a full clone, not a shallow
 one). If that commit is missing, Pitstop runs everything and says why.
 
+A workflow for GitHub Actions to start from:
+
+```yaml
+# .github/workflows/tests.yml
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the whole history, so the commit the map was made at is there
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Install Pitstop
+        run: |
+          git clone https://github.com/liiran/pitstop "$RUNNER_TEMP/pitstop"
+          cd "$RUNNER_TEMP/pitstop"
+          gem build pitstop.gemspec
+          gem install ./pitstop-*.gem
+
+      # On main: every test runs, and the map is kept for pull requests.
+      - name: Run every test and record the map
+        if: github.event_name == 'push'
+        run: pitstop record
+
+      - name: Keep the map
+        if: github.event_name == 'push' && !cancelled() && hashFiles('.pitstop/map.json.gz') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: .pitstop/map.json.gz
+          key: pitstop-map-${{ hashFiles('Gemfile.lock') }}-${{ github.sha }}
+
+      # On a pull request: the tests the change can affect, or all of them without a map.
+      - name: Fetch main's map
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v6
+        with:
+          path: .pitstop/map.json.gz
+          key: pitstop-map-${{ hashFiles('Gemfile.lock') }}-${{ github.event.pull_request.base.sha }}
+          restore-keys: pitstop-map-${{ hashFiles('Gemfile.lock') }}-
+
+      - name: Run the tests this change can affect
+        if: github.event_name == 'pull_request'
+        run: pitstop run --all-without-map
+```
+
+What the workflow relies on:
+
+- **Only main saves a map, and pull requests only read one.** The map decides which tests get
+  skipped, so it should never come from the change being tested.
+- **The map is kept even when main's tests fail.** Tests that failed are marked in it and always
+  run, so it is still a correct map.
+- **Pitstop is cloned outside your project's folder** (`$RUNNER_TEMP`). A clone inside it would
+  be new files in your project, and new Ruby files run everything. To stay on a version you
+  have read, add `git checkout <commit>` after the `cd`.
+- **Gems installed inside the project are fine.** `bundler-cache: true` puts them in
+  `vendor/bundle`, which git doesn't track. Pitstop leaves untracked files there (and in
+  `.bundle/`) out, the same as gems installed anywhere else on the machine.
+- **The lockfile is part of the cache key,** so a map is only used with the gems it was recorded
+  with. This matters most for a project that doesn't commit `Gemfile.lock` (most gems): nothing
+  in git tells Pitstop that a library was updated there.
+- **Your tests' own setup still applies.** Add the steps they need (a database, system
+  packages), and name the command if it isn't the default: `pitstop record -- bin/rails test`.
+
 | Exit status | Meaning |
 |---|---|
 | 0 | the selected tests passed (or nothing needed running) |
-| 1 | tests failed, or the map couldn't be used |
+| 1 | tests failed, or the map couldn't be used; from `pitstop status`, there is no map to use |
 | 3 | some selected tests didn't run, so the change isn't covered |
-| 64 | wrong usage: no map yet, an unknown option, a bad `.pitstop.yml` |
+| 64 | wrong usage: no map yet (and no `--all-without-map`), an unknown option, a bad `.pitstop.yml` |
 
 ## What it picks
 
@@ -137,6 +229,10 @@ one). If that commit is missing, Pitstop runs everything and says why.
 
 Tests that failed or were skipped when the map was made always run: their lines weren't all
 recorded. If the map's commit isn't in your repo, everything runs.
+
+Installed gems are not followed, wherever they are. That includes gems Bundler installed inside
+the project (`vendor/bundle`, and its settings in `.bundle/`) when git doesn't track them.
+`Gemfile.lock` says which gems those are, and a change to it runs everything.
 
 ### Code that runs when a file loads
 
@@ -354,7 +450,8 @@ What Pitstop does on your machine, so you can decide where to use it:
   outside the project.
 - **The map and `.pitstop.yml` are read as plain data** and checked before use. A map that isn't
   one Pitstop wrote is refused.
-- **`pitstop list` runs no project code.** It reads the map and asks git what changed.
+- **`pitstop list` and `pitstop status` run no project code.** They read the map and ask git
+  what changed.
 - **The map decides which tests get skipped**, so use one made by a build you trust (your main
   branch's CI), not one that arrives with the change being tested.
 
