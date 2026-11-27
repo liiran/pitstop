@@ -335,6 +335,78 @@ class CLITest < Minitest::Test
     end
   end
 
+  def save_map(shop, data)
+    FileUtils.mkdir_p(File.join(shop.dir, ".pitstop"))
+    Zlib::GzipWriter.open(File.join(shop.dir, ".pitstop", "map.json.gz")) { _1.write(JSON.generate(data)) }
+  end
+
+  # For a CI job that may or may not find a map: one command that is right either way.
+  def test_run_all_without_map_runs_every_test_when_there_is_no_map_to_use
+    Fixture.project(Shop::FILES) do |shop|
+      shop.commit("start")
+      code, out, err = run_tests(shop, "--all-without-map")
+      assert_equal 0, code, out + err
+      assert_match "Pitstop: there is no map yet (`pitstop record` makes one), so running every test", out
+      assert_equal 5, @ran, out
+      refute File.exist?(File.join(shop.dir, ".pitstop")), "a run without a map records nothing"
+
+      # A failing test is still a failing run.
+      shop.edit("lib/price.rb", "cents / 100", "cents / 10")
+      code, = run_tests(shop, "--all-without-map")
+      assert_equal 1, code
+      assert_equal 5, @ran
+      shop.git("checkout", "-q", "--", "lib/price.rb")
+
+      # A map this version of Pitstop can't read, as after an upgrade.
+      save_map(shop, "version" => 1, "commit" => "0" * 40, "tests" => [])
+      code, out, err = run_tests(shop, "--all-without-map", "--", Gem.ruby, "-S", "rake", "test")
+      assert_equal 0, code, out + err
+      assert_match "Pitstop: the map can't be used (.pitstop/map.json.gz is from another version of Pitstop), so running every test", out
+      assert_equal 5, @ran
+
+      # Without the flag, both stay errors and run nothing.
+      code, out, err = run_tests(shop)
+      assert_equal 1, code
+      assert_match "is from another version of Pitstop: run `pitstop record` again", err
+      assert_equal 0, @ran, out
+      FileUtils.rm_rf(File.join(shop.dir, ".pitstop"))
+      code, = run_tests(shop)
+      assert_equal 64, code
+      assert_equal 0, @ran
+
+      # Something in the map's place that can't be opened.
+      FileUtils.mkdir_p(File.join(shop.dir, ".pitstop", "map.json.gz"))
+      code, out, err = run_tests(shop, "--all-without-map")
+      assert_equal 0, code, out + err
+      assert_match(/Pitstop: the map can't be used \(\.pitstop\/map\.json\.gz can't be read \(.+\)\), so running every test/, out)
+      assert_equal 5, @ran
+      code, _, err = shop.pitstop("list")
+      assert_equal 1, code
+      assert_equal 1, err.lines.size, "one plain line, not a stack trace:\n#{err}"
+    end
+  end
+
+  def test_run_all_without_map_changes_nothing_when_the_map_is_usable
+    Shop.recorded do |shop|
+      shop.edit("lib/cart.rb", "@items.sum", "@items.sum(0)")
+      code, out, err = run_tests(shop, "--all-without-map")
+      assert_equal 0, code, out + err
+      assert_match "Running 1 of 5 tests (20.0%)", out
+      assert_equal 1, @ran
+
+      # Only a missing or unusable map is forgiven: wrong settings still stop the run.
+      shop.write(".pitstop.yml", "ignore: docs\n")
+      code, out, err = run_tests(shop, "--all-without-map")
+      assert_equal 64, code
+      assert_match ".pitstop.yml: ignore should be a list of file patterns", err
+      assert_equal 0, @ran, out
+      FileUtils.rm_rf(File.join(shop.dir, ".pitstop"))
+      code, out, = run_tests(shop, "--all-without-map")
+      assert_equal 64, code
+      assert_equal 0, @ran, out
+    end
+  end
+
   # The check that matters most: a run that quietly ran fewer tests than it selected must fail.
   def test_run_fails_when_selected_tests_did_not_run
     Shop.recorded do |shop|

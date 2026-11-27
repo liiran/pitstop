@@ -20,6 +20,7 @@ module Pitstop
         pitstop record [-- <test command>]           Run every test once and save the map (.pitstop/map.json.gz)
         pitstop list [--explain] [--json]            Show the tests your changes since the map can affect
         pitstop run [--explain] [-- <test command>]  Run only those tests
+        pitstop run --all-without-map                The same, but with no usable map run every test (for CI)
 
       The test command is, in order: the one after `--`, `command:` in .pitstop.yml, or
       `bin/rails test`, `bundle exec rspec` (a project with spec/ and no test/) or `bundle exec rake test`.
@@ -151,11 +152,19 @@ module Pitstop
     # --- run -------------------------------------------------------------------------------------
 
     def run_selected
-      explain = false
-      parser = OptionParser.new { |o| o.on("--explain") { explain = true } }
+      explain = without_map = false
+      parser = OptionParser.new do |o|
+        o.on("--explain") { explain = true }
+        o.on("--all-without-map") { without_map = true }
+      end
       rest = @argv.first == "--" ? @argv : parser.order!(@argv)
       command = command_from(rest)
-      map = load_map
+      map, problem = without_map ? map_or_problem : [load_map, nil]
+      unless map
+        say("Pitstop: #{problem}, so running every test")
+        return start({ "PITSTOP" => "run", "PITSTOP_TEST" => nil }, command) ? 0 : 1
+      end
+
       selection = select(map)
       print_reasons(map, selection, explain:)
 
@@ -335,6 +344,16 @@ module Pitstop
       raise ArgumentError, "no map yet: run `pitstop record` first" unless File.exist?(map_path)
 
       Map.load(map_path)
+    end
+
+    # For `pitstop run --all-without-map`: the map, or why there isn't one to use. Only the map
+    # is forgiven: a bad .pitstop.yml or an unknown option is still an error.
+    def map_or_problem
+      return [nil, "there is no map yet (`pitstop record` makes one)"] unless File.exist?(map_path)
+
+      [Map.load(map_path), nil]
+    rescue Map::Error => e
+      [nil, "the map can't be used (#{e.message.sub(/: run `pitstop record` again\z/, '')})"]
     end
 
     def select(map)

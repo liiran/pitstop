@@ -193,7 +193,7 @@ module Pitstop
       raise Error, "#{shown} isn't a map Pitstop wrote (#{problem}): run `pitstop record` again" if problem
 
       new(data)
-    rescue Zlib::Error, JSON::ParserError, EOFError, EncodingError => e
+    rescue Zlib::Error, JSON::ParserError, EOFError, EncodingError, SystemCallError => e
       raise Error, "#{shown} can't be read (#{e.message.lines.first.to_s.strip[0, 80]}): run `pitstop record` again"
     end
 
