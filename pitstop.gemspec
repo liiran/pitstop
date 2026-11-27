@@ -15,5 +15,5 @@ Gem::Specification.new do |spec|
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
 
-  spec.add_dependency "prism", ">= 1.2"
+  spec.add_dependency "prism", "~> 1.2"
 end

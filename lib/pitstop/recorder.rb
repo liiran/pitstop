@@ -752,16 +752,21 @@ module Pitstop
     #   owner   the class or module whose instances have the method (a singleton class for
     #           `File.read` and the like)
     #   note    Ruby code for the note, which can use `args`, `options` and `self`
-    def self.put_in_front(owner, name, note, keywords: true)
+    #   copied  for a module whose methods get copied to other places (Kernel: `delegate` gives
+    #           its objects a copy of Kernel with the private methods taken out). The original is
+    #           then fetched from the module itself, not called by its private name, which the
+    #           copy doesn't have.
+    def self.put_in_front(owner, name, note, keywords: true, copied: false)
       original = "__pitstop_#{name.to_s.sub('?', '_p').sub('[]', 'index')}"
       hidden = owner.private_method_defined?(name)
       owner.send(:alias_method, original, name)
       owner.send(:private, original)
       params = keywords ? "*args, **options, &block" : "*args, &block"
+      call = copied ? "::#{owner.name}.instance_method(:#{original}).bind_call(self, #{params})" : "#{original}(#{params})"
       owner.class_eval(<<~RUBY, HOOK, 1)
         def #{name}(#{params})
           #{note}
-          #{original}(#{params})
+          #{call}
         rescue ::Exception => error
           ::Pitstop::Record.unframe(error)
           ::Kernel.raise
@@ -778,7 +783,7 @@ module Pitstop
         put_in_front(Module, name, "::Pitstop::Record.listed(self, :#{side})", keywords: false)
       end
       { methods: false, public_methods: false, singleton_methods: false, private_methods: true }.each do |name, private_ones|
-        put_in_front(Kernel, name, "::Pitstop::Record.listed_on(self, #{private_ones})", keywords: false)
+        put_in_front(Kernel, name, "::Pitstop::Record.listed_on(self, #{private_ones})", keywords: false, copied: true)
       end
     ensure
       $VERBOSE = quiet

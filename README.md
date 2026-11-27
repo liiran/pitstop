@@ -345,7 +345,9 @@ What Pitstop does on your machine, so you can decide where to use it:
   - test names, file paths inside the project, line numbers, a commit id and the order the
     tests ran in;
   - the names of project files your tests read or looked for, and the patterns they listed
-    folders with. Names only: `.env` can appear in a map if a test read it, what it says can't;
+    folders with. Names only: `.env` can appear in a map if a test read it, what it says
+    can't. In a Rails app these include the paths its tests requested, because Rails looks
+    for each one under `public/`;
   - the names of methods (your code's, your gems' and Ruby's) and of your project's classes.
 
   It holds no source code, no file contents, no environment variables and no paths from
@@ -365,8 +367,8 @@ front of Ruby's file methods (`File.read`, `File.exist?`, `Dir.glob` and the lik
 method listings (`instance_methods`, `methods`), to note what your tests read. They hand every
 call on unchanged and give back what Ruby gives back. What a test could still notice:
 
-- those methods report a different `arity`, and `File`, `Dir` and `Module` gain private methods
-  named `__pitstop_…`;
+- those methods report a different `arity`, and `File`, `IO`, `Dir`, `FileTest`, `Module` and
+  `Kernel` (so every object) gain private methods named `__pitstop_…`;
 - on Ruby before 3.4, an error raised by one of them (`File.read` of a missing file) has one
   extra line at the top of its trace;
 - code that runs in another Ractor works as usual, but what it reads isn't noted.

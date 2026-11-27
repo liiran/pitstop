@@ -625,4 +625,31 @@ class SafetyTest < Minitest::Test
       assert_equal 0, code, out + err
     end
   end
+
+  # `delegate` gives its objects a copy of Kernel with the private methods taken out, and other
+  # libraries make blank objects the same way. The methods put in front of Kernel's listings
+  # mustn't depend on a private method that such a copy no longer has.
+  def test_objects_built_on_a_copy_of_kernel_can_list_their_methods_while_recording
+    test = <<~'RUBY'
+      require_relative "test_helper"
+      require "delegate"
+      class CopiesTest < Minitest::Test
+        def test_a_delegator = assert_includes(SimpleDelegator.new("x").methods, :upcase)
+
+        def test_a_blank_object_on_a_stripped_copy_of_kernel
+          stripped = ::Kernel.dup
+          stripped.class_eval { private_instance_methods.each { |m| undef_method(m) unless m.to_s.match?(/\Abind_call\z|\Ainstance_variable_|\Aobject_id\z/) } }
+          blank = Class.new(BasicObject) { include stripped }.new
+          assert_operator blank.methods.size, :>, 10
+          assert_operator blank.public_methods.size, :>, 10
+        end
+      end
+    RUBY
+    Fixture.project(Shop::FILES.merge("test/copies_test.rb" => test)) do |shop|
+      shop.commit("start")
+      code, out, err = shop.pitstop("record")
+      assert_equal 0, code, out + err
+      assert_match(/ 0 failures, 0 errors/, out)
+    end
+  end
 end
