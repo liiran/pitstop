@@ -39,6 +39,23 @@ class GitTest < Minitest::Test
     end
   end
 
+  # A project one folder down has its installed gems one folder down too.
+  def test_untracked_installed_gems_are_left_out_at_any_depth
+    Fixture.project("apps/shop/lib/cart.rb" => "one\n", "apps/shop/vendor/bundle/kept.rb" => "x\n") do |p|
+      p.commit
+      base = Pitstop::Git.new(p.dir).head
+      shop = Pitstop::Git.new(File.join(p.dir, "apps/shop"))
+      p.write("apps/shop/vendor/bundle/ruby/3.4.0/gems/money-1.0/lib/money.rb", "x\n")
+      p.write("apps/shop/.bundle/config", "x\n")
+      p.write("apps/web/vendor/bundle/ruby/3.4.0/gems/money-1.0/lib/money.rb", "x\n")
+      p.write("apps/shop/vendor/plugins/tax.rb", "x\n") # not where Bundler installs: still a change
+      p.write("apps/shop/vendor/bundle/kept.rb", "y\n") # tracked: still a change
+      expected = %w[vendor/bundle/kept.rb vendor/plugins/tax.rb]
+      assert_equal expected, shop.dirty_paths.sort
+      assert_equal expected, shop.changes_since(base).map(&:path).sort
+    end
+  end
+
   def test_file_contents_at_a_commit
     Fixture.project("a.rb" => "one\n") do |p|
       p.commit

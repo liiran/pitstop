@@ -175,6 +175,34 @@ class CLITest < Minitest::Test
     end
   end
 
+  # CI setups install the project's gems inside its folder (`bundle config path vendor/bundle`),
+  # where git sees thousands of files it doesn't track.
+  def test_gems_installed_inside_the_project_are_not_changes
+    gem_file = "vendor/bundle/ruby/3.4.0/gems/money-1.0/lib/money.rb"
+    Fixture.project(Shop::FILES) do |shop|
+      shop.commit("start")
+      shop.write(gem_file, "module Money; end\n")
+      shop.write(".bundle/config", "---\nBUNDLE_PATH: \"vendor/bundle\"\n")
+      code, _, err = shop.pitstop("record")
+      assert_equal 0, code, err
+      assert_empty shop.map["dirty"], "installed gems are not uncommitted work"
+      assert_empty picked(shop)
+
+      # The same checkout with its gems installed again, as on another CI machine.
+      shop.write("vendor/bundle/ruby/3.4.0/gems/money-1.0/data/rates.json", "{}")
+      shop.write("vendor/bundle/ruby/3.4.0/gems/cents-2.0/lib/cents.rb", "module Cents; end\n")
+      assert_empty picked(shop)
+      shop.edit("lib/cart.rb", "@items.sum", "@items.sum(0)")
+      assert_equal ["CartTest#test_total"], picked(shop)
+
+      # A project that keeps such a folder in git has made it part of its code.
+      shop.git("add", "-f", gem_file)
+      shop.commit("vendored")
+      shop.write(gem_file, "module Money; VERSION = 2; end\n")
+      assert_equal :all, picked(shop)
+    end
+  end
+
   def test_tests_that_failed_or_were_skipped_when_recorded_always_run
     files = Shop::FILES.merge("test/flaky_test.rb" => <<~RUBY)
       require_relative "test_helper"
