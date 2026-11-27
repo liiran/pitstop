@@ -66,8 +66,9 @@ module Pitstop
     # CI setups do (`bundle config path vendor/bundle`). Files there that git doesn't track are
     # installed gems, and Pitstop treats them like gems installed anywhere else on the machine:
     # it doesn't look at them. The lockfile says which gems they are, and a change to it runs
-    # everything. Files there that git does track count like any other file.
-    INSTALLED_GEMS = %r{(\A|/)(vendor/bundle|\.bundle)/}
+    # everything. Files there that git does track count like any other file, and so does a
+    # folder of that name anywhere but the top of the project (a test's fixture, say).
+    INSTALLED_GEMS = %r{\A(vendor/bundle|\.bundle)/}
 
     # Paths with uncommitted changes (including untracked files).
     def dirty_paths
@@ -75,12 +76,11 @@ module Pitstop
       paths = []
       until fields.empty?
         entry = fields.shift
-        next if entry.start_with?("??") && entry[3..].match?(INSTALLED_GEMS)
-
-        paths << entry[3..]
-        paths << fields.shift if entry.start_with?("R", "C") # a rename lists its old path next
+        path = project_path(entry[3..])
+        paths << path unless entry.start_with?("??") && path.match?(INSTALLED_GEMS)
+        paths << project_path(fields.shift) if entry.start_with?("R", "C") # a rename lists its old path next
       end
-      paths.map { project_path(_1) }
+      paths
     end
 
     # Everything that differs between `base` and the working tree, plus untracked files.
@@ -99,7 +99,8 @@ module Pitstop
       end
       # `:/` is the whole repository, not only the folder git was started in.
       names(run("ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/")).each do |path|
-        changes << Change.new(status: "A", path: project_path(path)) unless path.match?(INSTALLED_GEMS)
+        path = project_path(path)
+        changes << Change.new(status: "A", path:) unless path.match?(INSTALLED_GEMS)
       end
       changes
     end

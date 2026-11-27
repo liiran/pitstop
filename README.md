@@ -196,8 +196,8 @@ What the workflow relies on:
   be new files in your project, and new Ruby files run everything. To stay on a version you
   have read, add `git checkout <commit>` after the `cd`.
 - **Gems installed inside the project are fine.** `bundler-cache: true` puts them in
-  `vendor/bundle`, which git doesn't track. Pitstop leaves untracked files there (and in
-  `.bundle/`) out, the same as gems installed anywhere else on the machine.
+  `vendor/bundle` at the top of the project, which git doesn't track. Pitstop leaves untracked
+  files there (and in `.bundle/`) out, the same as gems installed anywhere else on the machine.
 - **The lockfile is part of the cache key,** so a map is only used with the gems it was recorded
   with. This matters most for a project that doesn't commit `Gemfile.lock` (most gems): nothing
   in git tells Pitstop that a library was updated there.
@@ -231,8 +231,8 @@ Tests that failed or were skipped when the map was made always run: their lines 
 recorded. If the map's commit isn't in your repo, everything runs.
 
 Installed gems are not followed, wherever they are. That includes gems Bundler installed inside
-the project (`vendor/bundle`, and its settings in `.bundle/`) when git doesn't track them.
-`Gemfile.lock` says which gems those are, and a change to it runs everything.
+the project (`vendor/bundle` at its top, and Bundler's settings in `.bundle/`) when git doesn't
+track them. `Gemfile.lock` says which gems those are, and a change to it runs everything.
 
 ### Code that runs when a file loads
 

@@ -39,8 +39,10 @@ class GitTest < Minitest::Test
     end
   end
 
-  # A project one folder down has its installed gems one folder down too.
-  def test_untracked_installed_gems_are_left_out_at_any_depth
+  # A project one folder down has its installed gems one folder down too. Only that one place
+  # is left out: a folder of the same name deeper in the project, or in the project next door,
+  # is something else.
+  def test_untracked_installed_gems_are_left_out_only_at_the_top_of_the_project
     Fixture.project("apps/shop/lib/cart.rb" => "one\n", "apps/shop/vendor/bundle/kept.rb" => "x\n") do |p|
       p.commit
       base = Pitstop::Git.new(p.dir).head
@@ -50,7 +52,10 @@ class GitTest < Minitest::Test
       p.write("apps/web/vendor/bundle/ruby/3.4.0/gems/money-1.0/lib/money.rb", "x\n")
       p.write("apps/shop/vendor/plugins/tax.rb", "x\n") # not where Bundler installs: still a change
       p.write("apps/shop/vendor/bundle/kept.rb", "y\n") # tracked: still a change
-      expected = %w[vendor/bundle/kept.rb vendor/plugins/tax.rb]
+      p.write("apps/shop/test/fixtures/vendor/bundle/helper.rb", "x\n")
+      p.write("apps/shop/test/fixtures/.bundle/config", "x\n")
+      expected = %w[../web/vendor/bundle/ruby/3.4.0/gems/money-1.0/lib/money.rb test/fixtures/.bundle/config
+                    test/fixtures/vendor/bundle/helper.rb vendor/bundle/kept.rb vendor/plugins/tax.rb]
       assert_equal expected, shop.dirty_paths.sort
       assert_equal expected, shop.changes_since(base).map(&:path).sort
     end
