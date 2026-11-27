@@ -275,6 +275,114 @@ class CLITest < Minitest::Test
     end
   end
 
+  # --- pitstop status ----------------------------------------------------------------------------
+
+  def status(shop)
+    code, out, err = shop.pitstop("status")
+    [code, out.lines(chomp: true), err]
+  end
+
+  def test_status_says_how_far_the_code_has_moved_and_what_a_run_would_do
+    Shop.recorded do |shop|
+      code, lines, err = status(shop)
+      assert_equal 0, code, err
+      assert_equal 3, lines.size, lines.join("\n")
+      assert_match(/\AMap: of commit #{shop.map['commit'][0, 7]} \(committed .+\), 5 tests\z/, lines[0])
+      assert_equal "Your code: at the map's commit, no files changed", lines[1]
+      assert_equal "Next `pitstop run`: nothing, since none of your changes can affect a test", lines[2]
+
+      shop.edit("lib/cart.rb", "@items.sum", "@items.sum(0)")
+      _, lines, = status(shop)
+      assert_equal "Your code: at the map's commit, 1 file changed (1 not committed)", lines[1]
+      assert_equal "Next `pitstop run`: 1 of 5 tests (20.0%)", lines[2]
+      _, out, = run_tests(shop)
+      assert_match "Running 1 of 5 tests (20.0%)", out, "a run does what status said it would"
+      assert_equal 1, @ran
+
+      shop.commit("sum")
+      shop.edit("README.md", "Shop", "The shop")
+      shop.commit("readme")
+      shop.write("notes.md", "notes\n")
+      _, lines, = status(shop)
+      assert_equal "Your code: 2 commits past the map's, 3 files changed (1 not committed)", lines[1]
+      assert_equal "Next `pitstop run`: 1 of 5 tests (20.0%)", lines[2]
+
+      shop.write("Gemfile.lock", "changed")
+      code, lines, = status(shop)
+      assert_equal 0, code
+      assert_equal "Next `pitstop run`: all 5 tests: Gemfile.lock: app-wide file", lines[2]
+      assert_empty Dir[File.join(shop.dir, ".pitstop", "*")] - [File.join(shop.dir, ".pitstop", "map.json.gz")], "status leaves nothing behind"
+    end
+  end
+
+  def test_status_when_the_checkout_is_not_ahead_of_the_map
+    Shop.recorded do |shop|
+      shop.git("checkout", "-q", "-b", "other")
+      shop.edit("lib/cart.rb", "@items.sum", "@items.sum(0)")
+      shop.commit("on another branch")
+      assert_equal 0, shop.pitstop("record").first
+      shop.git("checkout", "-q", "-")
+      _, lines, = status(shop)
+      assert_equal "Your code: 1 commit behind the map's, 1 file changed", lines[1]
+      assert_equal "Next `pitstop run`: 1 of 5 tests (20.0%)", lines[2]
+
+      shop.edit("README.md", "Shop", "The shop")
+      shop.commit("readme")
+      _, lines, = status(shop)
+      assert_equal "Your code: on another branch from the map's commit (1 commit it doesn't have, 1 of its commits missing), 2 files changed", lines[1]
+
+      save_map(shop, shop.map.merge("commit" => "f" * 40))
+      code, lines, = status(shop)
+      assert_equal 0, code
+      assert_equal ["Map: of commit fffffff, 5 tests",
+                    "Your code: can't be compared with it: that commit isn't in this repo (a shallow clone?)",
+                    "Next `pitstop run`: all 5 tests: the map's commit fffffff isn't in this repo"], lines
+    end
+  end
+
+  def test_status_names_tests_that_did_not_pass_and_files_not_committed_when_the_map_was_made
+    files = Shop::FILES.merge("test/flaky_test.rb" => <<~RUBY)
+      require_relative "test_helper"
+      class FlakyTest < Minitest::Test
+        def test_flaky = assert(ENV["FLAKY_PASS"])
+      end
+    RUBY
+    Fixture.project(files) do |shop|
+      shop.commit("start")
+      shop.edit("lib/cart.rb", "@items.sum", "@items.sum + 0")
+      assert_equal 1, shop.pitstop("record").first
+      code, lines, err = status(shop)
+      assert_equal 0, code, err
+      assert_match(/\AMap: of commit \h{7} \(committed .+\), 6 tests \(1 didn't pass then, and always run\)\z/, lines[0])
+      assert_equal "  recorded with 1 file not committed, which a run treats as changed: lib/cart.rb", lines[1]
+      assert_equal "Your code: at the map's commit, 1 file changed (1 not committed)", lines[2]
+      assert_equal "Next `pitstop run`: all 6 tests: #{shop.selection['run_all']}", lines[3]
+    end
+  end
+
+  def test_status_without_a_map_to_use
+    Fixture.project(Shop::FILES) do |shop|
+      shop.commit("start")
+      code, lines, err = status(shop)
+      assert_equal 1, code
+      assert_empty err
+      assert_equal ["Map: none yet. `pitstop record` makes one.",
+                    "Next `pitstop run`: stops with an error. `pitstop run --all-without-map` runs every test."], lines
+      refute File.exist?(File.join(shop.dir, ".pitstop")), "status writes nothing"
+
+      FileUtils.mkdir_p(File.join(shop.dir, ".pitstop"))
+      File.binwrite(File.join(shop.dir, ".pitstop", "map.json.gz"), "not a map")
+      code, lines, err = status(shop)
+      assert_equal 1, code
+      assert_empty err
+      assert_equal "Map: can't be used. .pitstop/map.json.gz can't be read (not in gzip format): run `pitstop record` again", lines[0]
+
+      assert_equal 64, shop.pitstop("status", "now").first
+      shop.write(".pitstop.yml", "ignore: docs\n")
+      assert_equal 64, shop.pitstop("status").first
+    end
+  end
+
   # --- pitstop run -------------------------------------------------------------------------------
 
   def run_tests(shop, *argv)

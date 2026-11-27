@@ -14,6 +14,7 @@ module Pitstop
   # pitstop record [-- command]   run the whole suite once, noting which code each test runs
   # pitstop list [--explain]      show which tests your changes can affect, without running them
   # pitstop run [-- command]      run only those tests
+  # pitstop status                how far the code has moved from the map, and what a run would do
   class CLI
     USAGE = <<~TEXT
       Usage:
@@ -21,6 +22,7 @@ module Pitstop
         pitstop list [--explain] [--json]            Show the tests your changes since the map can affect
         pitstop run [--explain] [-- <test command>]  Run only those tests
         pitstop run --all-without-map                The same, but with no usable map run every test (for CI)
+        pitstop status                               Say how old the map is and what `pitstop run` would do now
 
       The test command is, in order: the one after `--`, `command:` in .pitstop.yml, or
       `bin/rails test`, `bundle exec rspec` (a project with spec/ and no test/) or `bundle exec rake test`.
@@ -49,6 +51,7 @@ module Pitstop
       when "record" then record
       when "list" then list
       when "run" then run_selected
+      when "status" then status
       when "--version", "-v" then @out.puts(VERSION) || 0
       when nil, "help", "--help", "-h" then @out.puts(USAGE) || 0
       else
@@ -148,6 +151,63 @@ module Pitstop
       end
       0
     end
+
+    # --- status ----------------------------------------------------------------------------------
+
+    # Three lines: what the map is, how far the code has moved from it, and what `pitstop run`
+    # would do now. Runs no tests and no project code. Exit status 1 when there is no map to use.
+    def status
+      OptionParser.new.parse!(@argv)
+      raise ArgumentError, "pitstop status takes no arguments (got #{@argv.first.inspect})" unless @argv.empty?
+
+      command = command_from([])
+      map = begin
+        Map.load(map_path) if File.exist?(map_path)
+      rescue Map::Error => e
+        say("Map: can't be used. #{e.message}")
+      end
+      unless map
+        say("Map: none yet. `pitstop record` makes one.") unless File.exist?(map_path)
+        say("Next `pitstop run`: stops with an error. `pitstop run --all-without-map` runs every test.")
+        return 1
+      end
+
+      git = Git.new(root)
+      known = git.commit?(map.commit)
+      failed = map.tests.count(&:failed?)
+      say("Map: of commit #{map.commit[0, 7]}#{" (#{git.made(map.commit)})" if known}, #{count(map.tests.size, 'test')}" \
+          "#{" (#{failed} didn't pass then, and always run)" if failed.positive?}")
+      unless map.dirty.empty?
+        say("  recorded with #{count(map.dirty.size, 'file')} not committed, which a run treats as changed: " \
+            "#{map.dirty.first(5).join(', ')}#{', …' if map.dirty.size > 5}")
+      end
+      say("Your code: #{known ? moved(git, map) : "can't be compared with it: that commit isn't in this repo (a shallow clone?)"}")
+
+      selection = select(map)
+      if selection.all?
+        say("Next `pitstop run`: all #{count(map.tests.size, 'test')}: #{selection.run_all}")
+      else
+        plan = plan_for(map, selection, command)
+        say("Next `pitstop run`: #{plan.empty? ? 'nothing, since none of your changes can affect a test' : describe(plan, map)}")
+      end
+      0
+    end
+
+    # "3 commits past the map's, 4 files changed (1 not committed)"
+    def moved(git, map)
+      ours, theirs = git.apart(map.commit)
+      ours = if theirs.zero? then ours.zero? ? "at the map's commit" : "#{count(ours, 'commit')} past the map's"
+             elsif ours.zero? then "#{count(theirs, 'commit')} behind the map's"
+             else "on another branch from the map's commit (#{count(ours, 'commit')} it doesn't have, #{theirs} of its commits missing)"
+             end
+      changed = git.changes_since(map.commit).map(&:path).reject { _1.start_with?(".pitstop/") }
+      return "#{ours}, no files changed" if changed.empty?
+
+      loose = (git.dirty_paths & changed).size
+      "#{ours}, #{count(changed.size, 'file')} changed#{" (#{loose} not committed)" if loose.positive?}"
+    end
+
+    def count(n, word) = "#{n} #{word}#{'s' unless n == 1}"
 
     # --- run -------------------------------------------------------------------------------------
 

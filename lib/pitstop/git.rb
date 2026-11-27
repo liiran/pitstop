@@ -48,6 +48,20 @@ module Pitstop
       system("git", "-C", @root, "cat-file", "-e", "#{sha}^{commit}", out: File::NULL, err: File::NULL)
     end
 
+    # When a commit was made, as git words it: "committed 2026-11-24, 3 days ago".
+    def made(sha)
+      check(sha)
+      run("show", "-s", "--format=committed %cs, %cr", sha, "--").strip
+    end
+
+    # How far the checkout has moved from a commit: [commits it has that the commit doesn't,
+    # commits the commit has that it doesn't]. [3, 0] is three commits later on the same line.
+    def apart(sha)
+      check(sha)
+      theirs, ours = run("rev-list", "--left-right", "--count", "#{sha}...HEAD", "--").split.map(&:to_i)
+      [ours, theirs]
+    end
+
     # Paths with uncommitted changes (including untracked files).
     def dirty_paths
       fields = names(run("status", "--porcelain", "-z", "--untracked-files=all"))
