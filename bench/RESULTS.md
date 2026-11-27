@@ -418,7 +418,9 @@ test. That is slower than a plain run:
   tests read. On Fizzy, the three versions timed in turn, four times each, next to a plain
   run: 39.6 s, 40.5 s and 41.6 s at best, where the plain run's best was 24.5 s. That is 1.61,
   1.65 and 1.70 times. (The table's 1.83 is the middle of three timings from another session
-  that day.)
+  that day.) The methods that do the noting were rewritten afterwards, so that they work from
+  another Ractor. Timed the same way, before and after came out the same: 46.7 s and 46.9 s at
+  best, next to a plain run's 28.7 s, on a slower day for the machine (1.63 and 1.64 times).
 - **RuboCop only stays at 1.5 because Pitstop changes how it records.** RuboCop's tests take a few
   milliseconds each, and reading the coverage after each of 36,505 tests made recording several
   times slower than a plain run when that was tried. Pitstop notices when reading costs more than
